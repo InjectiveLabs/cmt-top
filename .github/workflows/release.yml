@@ -1,0 +1,90 @@
+name: release
+
+# Triggers:
+#   - A GitHub Release is published (UI flow): builds & pushes the image,
+#     tagged with the release version + `latest` if it's not a pre-release.
+#   - A semver tag is pushed (`vX.Y.Z`): same behaviour, lets you cut a release
+#     entirely from the CLI without going through the Releases UI.
+#   - Manual dispatch: builds & pushes a one-off image tagged with the chosen
+#     ref name. Useful for testing the workflow itself.
+on:
+  release:
+    types: [published]
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE: 0xrigo/cmt-top
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Don't leave the GITHUB_TOKEN in .git/config for later steps.
+          persist-credentials: false
+          # We resolve the version from the tag below, so a shallow clone is
+          # sufficient — no `git describe` needed.
+          fetch-depth: 1
+
+      - name: Resolve version
+        id: version
+        run: |
+          # Prefer the release tag / pushed tag; fall back to short SHA for
+          # manual runs.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${{ github.event.release.tag_name }}" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            VERSION="$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+            type=sha,format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.title=cmt-top
+            org.opencontainers.image.description=Live dashboard for CometBFT-based Cosmos chains
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

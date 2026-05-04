@@ -1,0 +1,83 @@
+# cmt-top — docker compose
+#
+# Usage:
+#   cp .env.example .env  &&  $EDITOR .env
+#   docker compose up -d
+#   open http://localhost:8080
+#
+# Optional Prometheus + Grafana profile:
+#   docker compose --profile metrics up -d
+#
+# Tear down:
+#   docker compose down       (preserves volumes)
+#   docker compose down -v    (also drops the prometheus volume)
+
+services:
+  cmt-top:
+    # Use the published image by default. Comment `image:` and uncomment
+    # `build:` to build locally instead.
+    image: 0xrigo/cmt-top:latest
+    # build:
+    #   context: .
+    #   args:
+    #     VERSION: "${VERSION:-docker}"
+    container_name: cmt-top
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Bind the dashboard to localhost on the host. Drop the "127.0.0.1:"
+    # prefix to expose externally — but only with CMTOP_WEB_TOKEN set.
+    ports:
+      - "127.0.0.1:8080:8080"   # web UI + REST + WS
+      - "127.0.0.1:9091:9091"   # /metrics
+    # Hardening: read-only rootfs, no extra capabilities, no privilege
+    # escalation. The binary only needs to bind ports + write nowhere on disk
+    # (logs go to stdout). /tmp is mounted as tmpfs for any incidental temp files.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    tmpfs:
+      - /tmp:size=16m
+    # Mount a config.toml if you'd rather configure via TOML than env.
+    # volumes:
+    #   - ./config.toml:/app/config.toml:ro
+    # command: ["--config", "/app/config.toml"]
+
+  # Prometheus + Grafana — opt-in via `--profile metrics`.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: cmt-top-prom
+    profiles: ["metrics"]
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - cmt-top
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: cmt-top-grafana
+    profiles: ["metrics"]
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  prom-data:
+  grafana-data:

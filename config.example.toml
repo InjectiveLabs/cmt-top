@@ -1,0 +1,66 @@
+# cmt-top — sample configuration
+#
+# Default search path: $XDG_CONFIG_HOME/cmt-top/config.toml
+# (or ~/.config/cmt-top/config.toml). Use --config /path/to/file.toml
+# to point at a specific file.
+#
+# Generate a config matching the running defaults:
+#   ./bin/cmt-top --print-config > ~/.config/cmt-top/config.toml
+#
+# All sections are optional; missing keys fall back to baked-in defaults.
+
+[chain]
+name           = "injective-1"
+bech32_prefix  = "inj"
+lcd            = "https://lcd.injective.network"
+explorer_url   = "https://explorer.injective.network/validator/{address}"
+mintscan_path  = "injective"
+
+# Multi-RPC: list as many as you want; first entry wins until it errors and
+# the circuit breaker fails over to the next. The WS client uses the same
+# endpoint list; HTTP and WS share a single failover pool.
+[[chain.rpc]]
+url     = "https://tm.injective.network"
+primary = true
+
+[[chain.rpc]]
+url = "https://injective-rpc.publicnode.com:443"
+
+# Cross-RPC AppHash comparison. When set, every committed block is
+# re-queried at each endpoint and divergent app_hash values are surfaced
+# alongside the in-round divergence panel.
+# monitored_rpcs = [
+#   "https://injective-rpc.publicnode.com:443",
+#   "https://rpc.injective.posthuman.digital",
+# ]
+
+[refresh]
+validators   = "30s"   # validator-set + moniker enrichment
+upgrade_plan = "5m"    # x/upgrade plan (rare)
+status       = "5s"    # /status — height, sync, our-validator
+block_time   = "30s"   # rolling avg block time
+consensus    = "1s"    # HTTP fallback poll cadence; ignored while WS is live
+
+[divergence]
+threshold_pct    = 5.0       # any non-canonical group ≥ this VP% is a split
+history_size     = 32        # last N divergent rounds retained for the history view
+debounce         = "250ms"   # vote-stream debounce before emitting detection
+include_prevotes = false     # also detect prevote-stage splits (noisy)
+
+[ui]
+mode = "web"   # tui | web | both | headless
+
+[ui.tui]
+timezone       = "UTC"
+disable_emojis = false
+
+[ui.web]
+listen      = "127.0.0.1:8080"
+# token       = "set-me-when-binding-non-loopback"
+# cors_origin = "https://my-dash.example.com"
+disabled    = false
+
+[obs]
+metrics_listen = "127.0.0.1:9091"
+log_level      = "info"   # debug | info | warn | error
+log_format     = "text"   # text | json
