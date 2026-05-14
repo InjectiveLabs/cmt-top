@@ -56,7 +56,7 @@ disable_emojis = false
 
 [ui.web]
 listen      = "127.0.0.1:8080"
-# token       = "set-me-when-binding-non-loopback"
+# token       = "set-me-when-binding-non-loopback (otherwise a warning is logged)"
 # cors_origin = "https://my-dash.example.com"
 disabled    = false
 

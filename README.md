@@ -92,7 +92,7 @@ See [.env.example](.env.example). Common knobs:
 | `CMTOP_MONITORED_RPCS` | CSV of extra RPCs for cross-endpoint AppHash compare. |
 | `CMTOP_MODE` | `tui` \| `web` \| `both` \| `headless` |
 | `CMTOP_WEB_LISTEN` | Web bind, default `127.0.0.1:8080`. |
-| `CMTOP_WEB_TOKEN` | Bearer token. **Required** when binding non-loopback. |
+| `CMTOP_WEB_TOKEN` | Bearer token. Recommended when binding non-loopback (a warning is logged if unset). |
 | `CMTOP_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
 | `CMTOP_BECH32_PREFIX` | Operator address prefix (default `inj`). |
 
@@ -106,7 +106,7 @@ See [.env.example](.env.example). Common knobs:
 --monitored-rpc <url>       extra RPC for AppHash compare; pass multiple times
 --mode tui|web|both|headless
 --web-listen <addr>         default 127.0.0.1:8080
---web-token <token>         required for non-loopback bind
+--web-token <token>         recommended for non-loopback bind
 --metrics-listen <addr>     default 127.0.0.1:9091
 --bech32-prefix <prefix>    default inj
 --divergence-threshold <pct>  default 5.0
@@ -189,7 +189,7 @@ TOKEN=$(openssl rand -hex 32)
 #   http://10.0.0.5:8080/?token=<token>
 ```
 
-The binary refuses to start with a non-loopback bind and an empty token.
+A non-loopback bind with an empty token still starts, but logs a warning that the dashboard is exposed without auth.
 
 ### Compare AppHash across multiple RPCs
 

@@ -100,6 +100,12 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
+	if s.opts.Token == "" &&
+		!strings.HasPrefix(s.opts.Listen, "127.") &&
+		!strings.HasPrefix(s.opts.Listen, "localhost") {
+		s.opts.Logger.Warn("web server bound to non-loopback address without a bearer token; dashboard is exposed without auth",
+			"addr", s.opts.Listen)
+	}
 	s.opts.Logger.Info("web listening", "addr", s.opts.Listen)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err

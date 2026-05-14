@@ -231,11 +231,6 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("ui.mode must be one of tui|web|both|headless (got %q)", c.UI.Mode)
 	}
-	if !strings.HasPrefix(c.UI.Web.Listen, "127.") &&
-		!strings.HasPrefix(c.UI.Web.Listen, "localhost") &&
-		c.UI.Web.Token == "" {
-		return errors.New("ui.web.listen is non-loopback but ui.web.token is empty; refusing to expose dashboard without auth")
-	}
 	if c.Divergence.ThresholdPct < 0 || c.Divergence.ThresholdPct > 100 {
 		return errors.New("divergence.threshold_pct out of range")
 	}

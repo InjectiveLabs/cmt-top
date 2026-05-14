@@ -115,7 +115,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&monitoredRPCs, "monitored-rpc", nil, "extra RPC URL(s) for cross-endpoint AppHash comparison; pass multiple times")
 	cmd.Flags().StringVar(&mode, "mode", "", "tui | web | both | headless")
 	cmd.Flags().StringVar(&webListen, "web-listen", "", "web bind addr (default 127.0.0.1:8080)")
-	cmd.Flags().StringVar(&webToken, "web-token", "", "bearer token; required when binding non-loopback")
+	cmd.Flags().StringVar(&webToken, "web-token", "", "bearer token; recommended when binding non-loopback")
 	cmd.Flags().StringVar(&metricsAddr, "metrics-listen", "", "prometheus bind addr")
 	cmd.Flags().StringVar(&logLevel, "log-level", "", "debug | info | warn | error")
 	cmd.Flags().StringVar(&bech32, "bech32-prefix", "", "bech32 prefix (default inj)")

@@ -54,9 +54,9 @@ ENV CMTOP_MODE=web \
     CMTOP_METRICS_LISTEN=0.0.0.0:9091 \
     CMTOP_LOG_LEVEL=info
 
-# Loopback inside the container is useless; we bind 0.0.0.0 by default. That
-# requires a token unless the operator explicitly uses --web-token "" via
-# command override. The healthcheck hits /healthz which is unauthenticated.
+# Loopback inside the container is useless; we bind 0.0.0.0 by default.
+# A token is recommended (set CMTOP_WEB_TOKEN); otherwise a warning is logged
+# at startup. The healthcheck hits /healthz which is unauthenticated.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
