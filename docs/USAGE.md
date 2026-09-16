@@ -175,8 +175,11 @@ a non-root user and starts in web mode on `0.0.0.0:8080`.
 ### Build
 
 ```sh
-docker build -t cmt-top:local --build-arg VERSION=$(git describe --tags --always) .
+docker build -t public.ecr.aws/l9h3g6c6/cmt-top:latest --build-arg VERSION=$(git describe --tags --always) .
 ```
+
+This local tag matches Compose's default image, so the commands below also work
+before the first release has published an image to the new ECR repository.
 
 ### Run with `docker compose`
 

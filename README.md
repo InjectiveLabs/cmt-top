@@ -27,7 +27,8 @@ Use a different RPC:
 
 ## Docker
 
-Compose uses `public.ecr.aws/l9h3g6c6/cmt-top:latest`:
+Compose uses `public.ecr.aws/l9h3g6c6/cmt-top:latest` after the first stable
+release. Until then, [build the image locally](docs/USAGE.md#build).
 
 ```sh
 cp .env.example .env

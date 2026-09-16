@@ -23,6 +23,8 @@ public.ecr.aws/l9h3g6c6/cmt-top
 
 Choose a new version and push its tag after the code is ready. For example, a tag named `v1.2.3` publishes `:v1.2.3` and updates `:latest`. A prerelease such as `v1.2.3-rc.1` publishes only that version tag. These are examples, not the current release version.
 
+The migration preserves the historical `v0.1.0` and `v0.1.1` tags, including their original workflow files. Their release jobs were not rerun during import. ECR images begin with a new version tag on the migrated code; use the [local Docker build](USAGE.md#build) until that first release.
+
 For a retry, use **Actions → Release Docker image → Run workflow** and select the version tag, or run `gh workflow run release.yml --ref <version-tag>`. A branch dispatch is rejected. Publishing a GitHub Release alone does not start another build; this avoids duplicate image pushes for the same tag.
 
 The workflow requires the GitHub repository variable `AWS_ROLE_ARN` set to `arn:aws:iam::981432137740:role/cmt-top`. It does not require Docker Hub credentials or long-lived AWS keys. Blacksmith's GitHub installation must include this repository.
