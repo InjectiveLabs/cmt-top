@@ -16,7 +16,7 @@ services:
   cmt-top:
     # Use the published image by default. Comment `image:` and uncomment
     # `build:` to build locally instead.
-    image: 0xrigo/cmt-top:latest
+    image: public.ecr.aws/l9h3g6c6/cmt-top:latest
     # build:
     #   context: .
     #   args:
@@ -25,6 +25,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Container interfaces must be reachable by host forwarding and Prometheus.
+      CMTOP_WEB_LISTEN: "0.0.0.0:8080"
+      CMTOP_METRICS_LISTEN: "0.0.0.0:9091"
     # Bind the dashboard to localhost on the host. Drop the "127.0.0.1:"
     # prefix to expose externally — but only with CMTOP_WEB_TOKEN set.
     ports:

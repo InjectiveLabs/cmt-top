@@ -10,21 +10,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/InjectiveLabs/cmt-top/internal/divergence"
+	"github.com/InjectiveLabs/cmt-top/internal/events"
+	"github.com/InjectiveLabs/cmt-top/internal/metrics"
+	"github.com/InjectiveLabs/cmt-top/internal/state"
 	"github.com/gorilla/websocket"
-
-	"github.com/Ri-go/cmt-top/internal/divergence"
-	"github.com/Ri-go/cmt-top/internal/events"
-	"github.com/Ri-go/cmt-top/internal/obs"
-	"github.com/Ri-go/cmt-top/internal/state"
 )
 
 const (
 	wsWriteTimeout = 10 * time.Second
 	wsReadTimeout  = 60 * time.Second
 	wsPingPeriod   = 30 * time.Second
-	// wsMaxClients caps concurrent connections so a single attacker can't open
-	// thousands of WS clients (each ~10KB/s of vote stream) and OOM the host.
-	wsMaxClients = 32
+	wsMaxClients   = 32
 )
 
 type wsEnvelope struct {
@@ -37,254 +34,266 @@ type wsEnvelope struct {
 }
 
 type wsClient struct {
-	conn    *websocket.Conn
-	send    chan wsEnvelope
-	dropped atomic.Uint64
-	hub     *wsHub
-	subs    map[string]bool
+	conn      *websocket.Conn
+	send      chan wsEnvelope
+	dropped   atomic.Uint64
+	hub       *wsHub
+	mu        sync.Mutex // subscription changes and queue sequencing share one owner
+	subs      map[string]bool
+	seq       uint64
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type wsHub struct {
-	bus        *events.Bus
-	state      *state.State
-	tracker    *divergence.Tracker
-	log        *slog.Logger
-	corsOrigin string // optional same-origin override; "" = match Host
-
-	mu      sync.RWMutex
-	clients map[*wsClient]struct{}
-	seq     atomic.Uint64
-
-	divLastPush atomic.Int64  // unix nanos of last divergence.snapshot
-	divLastKey  atomic.Uint64 // packed (height, round, type) of most recent vote
+	bus         *events.Bus
+	state       *state.State
+	tracker     *divergence.Tracker
+	log         *slog.Logger
+	corsOrigin  string
+	explorerURL string
+	displayName string
+	mu          sync.RWMutex
+	clients     map[*wsClient]struct{}
+	dispatchMu  sync.Mutex // snapshot capture and delivery cannot overtake broadcasts
+	divLastPush time.Time
 }
 
 func newWSHub(bus *events.Bus, st *state.State, tracker *divergence.Tracker, log *slog.Logger, corsOrigin string) *wsHub {
-	return &wsHub{
-		bus:        bus,
-		state:      st,
-		tracker:    tracker,
-		log:        log,
-		corsOrigin: corsOrigin,
-		clients:    map[*wsClient]struct{}{},
-	}
+	return &wsHub{bus: bus, state: st, tracker: tracker, log: log, corsOrigin: corsOrigin, clients: map[*wsClient]struct{}{}}
 }
 
-// checkOrigin enforces same-origin (Origin host == Host) by default. Operators
-// can opt in to a specific cross-origin via the CORSOrigin option, mirroring
-// the REST CORS handling.
 func (h *wsHub) checkOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
-	if origin == "" {
-		// Non-browser clients (curl, native) typically omit Origin; allow.
+	if origin == "" || h.corsOrigin != "" && origin == h.corsOrigin {
 		return true
 	}
-	if h.corsOrigin != "" && origin == h.corsOrigin {
-		return true
-	}
-	// Same-origin: scheme://host of Origin must match the request's Host.
-	// Strip scheme prefix on Origin to compare host:port.
-	for _, p := range []string{"https://", "http://"} {
-		if strings.HasPrefix(origin, p) {
-			if origin[len(p):] == r.Host {
-				return true
-			}
-		}
-	}
-	return false
+	return origin == "https://"+r.Host || origin == "http://"+r.Host
+}
+
+func (h *wsHub) snapshot() wsEnvelope {
+	payload := snapshotJSON(h.state.Snapshot(), h.tracker, h.bus)
+	payload["explorerURL"] = h.explorerURL
+	payload["displayName"] = h.displayName
+	return wsEnvelope{Type: "state.snapshot", Ts: time.Now().UTC().Format(time.RFC3339Nano), Payload: payload}
 }
 
 func (h *wsHub) serveWS(w http.ResponseWriter, r *http.Request) {
-	upgrader := websocket.Upgrader{
-		ReadBufferSize:  4096,
-		WriteBufferSize: 4096,
-		CheckOrigin:     h.checkOrigin,
-	}
-	// Cap concurrent clients before upgrading so over-limit attempts don't
-	// even allocate a connection.
-	h.mu.RLock()
-	full := len(h.clients) >= wsMaxClients
-	h.mu.RUnlock()
-	if full {
+	// Reserve registration while upgrading so parallel handshakes cannot exceed the cap.
+	h.dispatchMu.Lock()
+	h.mu.Lock()
+	if len(h.clients) >= wsMaxClients {
+		h.mu.Unlock()
+		h.dispatchMu.Unlock()
 		http.Error(w, "too many ws clients", http.StatusServiceUnavailable)
 		return
 	}
+	upgrader := websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: h.checkOrigin, HandshakeTimeout: 5 * time.Second}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		h.log.Warn("ws upgrade failed", "err", err)
+		h.mu.Unlock()
+		h.dispatchMu.Unlock()
 		return
 	}
-	c := &wsClient{
-		conn: conn,
-		send: make(chan wsEnvelope, 256),
-		hub:  h,
-		subs: map[string]bool{"state": true, "blocks": true, "divergence": true, "votes": true},
-	}
-	h.mu.Lock()
+	c := &wsClient{conn: conn, send: make(chan wsEnvelope, 256), hub: h, subs: map[string]bool{"state": true, "blocks": true, "divergence": true, "votes": true}, done: make(chan struct{})}
 	h.clients[c] = struct{}{}
 	h.mu.Unlock()
+	// The first message is always a complete baseline, numbered one.
+	c.queue(h.snapshot())
+	h.dispatchMu.Unlock()
 	go c.writePump()
 	go c.readPump()
-
-	// Push cold-load snapshot.
-	c.queue(wsEnvelope{Type: "state.snapshot", Payload: snapshotJSON(h.state.Snapshot(), h.tracker, h.bus)})
 }
 
-// run subscribes to the bus and fans relevant events to clients.
 func (h *wsHub) run(ctx context.Context) {
-	defer obs.Recover("wshub")
-	ch, cancel := h.bus.Subscribe("wshub",
-		events.KindNewBlock, events.KindRoundChanged, events.KindVoteReceived,
-		events.KindStatusUpdated, events.KindUpgradePlanUpdated, events.KindBlockTimeUpdated,
-		events.KindValidatorSetUpdated,
-		events.KindDivergenceDetected, events.KindDivergenceResolved,
-		events.KindConnectionLost, events.KindConnectionRestored,
-	)
+	ch, cancel := h.bus.Subscribe("wshub", events.KindNewBlock, events.KindRoundChanged, events.KindVoteReceived,
+		events.KindStatusUpdated, events.KindUpgradePlanUpdated, events.KindBlockTimeUpdated, events.KindValidatorSetUpdated,
+		events.KindDivergenceDetected, events.KindDivergenceResolved, events.KindConnectionLost, events.KindConnectionRestored, events.KindEndpointAppHashDivergence)
 	defer cancel()
-
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	defer h.closeClients()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case ev := <-ch:
-			env := h.envelope(ev)
-			if env == nil {
-				continue
+		case <-tick.C:
+			h.dispatchMu.Lock()
+			h.broadcastLocked(h.snapshot())
+			h.dispatchMu.Unlock()
+		case ev, ok := <-ch:
+			if !ok {
+				return
 			}
-			h.broadcast(*env)
+			h.dispatchMu.Lock()
+			if env := h.envelope(ev); env != nil {
+				h.broadcastLocked(*env)
+			}
+			if ev.Kind == events.KindVoteReceived {
+				if time.Since(h.divLastPush) >= 150*time.Millisecond {
+					h.pushDivergenceLocked()
+					h.divLastPush = time.Now()
+				}
+			} else {
+				// Includes explicit null/removal updates and fallback state. Periodic snapshots
+				// additionally reconcile errors and dropped events from the lossy internal bus.
+				h.broadcastLocked(h.snapshot())
+			}
+			h.dispatchMu.Unlock()
 		}
 	}
 }
 
 func (h *wsHub) envelope(ev events.Event) *wsEnvelope {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	env := &wsEnvelope{Ts: time.Now().UTC().Format(time.RFC3339Nano), Payload: ev.Payload}
 	switch ev.Kind {
 	case events.KindNewBlock:
 		p := ev.Payload.(events.NewBlock)
-		return &wsEnvelope{Type: "block.committed", Ts: now, Height: p.Height, Payload: p}
+		env.Type = "block.committed"
+		env.Height = p.Height
 	case events.KindVoteReceived:
 		p := ev.Payload.(events.VoteReceived)
-		// Push the live tracker view: throttled, but always force a push when
-		// the vote opens a new (height, round, type) bucket. Without this, a
-		// short precommit phase falls between two throttle windows on every
-		// block and never makes it into the snapshot stream.
-		key := packVoteKey(p.Height, p.Round, int64(p.Type))
-		force := key != h.divLastKey.Swap(key)
-		h.maybePushDivergenceSnapshot(force)
-		return &wsEnvelope{Type: "vote.received", Ts: now, Height: p.Height, Round: p.Round, Payload: p}
+		env.Type = "vote.received"
+		env.Height = p.Height
+		env.Round = p.Round
 	case events.KindRoundChanged:
 		p := ev.Payload.(events.RoundChanged)
-		return &wsEnvelope{Type: "round.changed", Ts: now, Height: p.Height, Round: p.Round, Payload: p}
+		env.Type = "round.changed"
+		env.Height = p.Height
+		env.Round = p.Round
+	case events.KindEndpointAppHashDivergence:
+		env.Type = "rpc_comparison.updated"
 	case events.KindStatusUpdated:
-		return &wsEnvelope{Type: "status.updated", Ts: now, Payload: ev.Payload}
+		env.Type = "status.updated"
 	case events.KindUpgradePlanUpdated:
-		return &wsEnvelope{Type: "upgrade.changed", Ts: now, Payload: ev.Payload}
+		env.Type = "upgrade.changed"
 	case events.KindBlockTimeUpdated:
-		return &wsEnvelope{Type: "block_time.updated", Ts: now, Payload: ev.Payload}
+		env.Type = "block_time.updated"
+		env.Payload = map[string]any{"blockTime": ev.Payload.(events.BlockTimeUpdated).BlockTime.Milliseconds()}
 	case events.KindValidatorSetUpdated:
-		return &wsEnvelope{Type: "validators.changed", Ts: now, Payload: ev.Payload}
+		env.Type = "validators.changed"
 	case events.KindDivergenceDetected:
-		return &wsEnvelope{Type: "divergence.detected", Ts: now, Payload: ev.Payload}
+		env.Type = "divergence.detected"
 	case events.KindDivergenceResolved:
-		return &wsEnvelope{Type: "divergence.resolved", Ts: now, Payload: ev.Payload}
+		env.Type = "divergence.resolved"
 	case events.KindConnectionLost:
-		return &wsEnvelope{Type: "connection.lost", Ts: now, Payload: ev.Payload}
+		env.Type = "connection.lost"
 	case events.KindConnectionRestored:
-		return &wsEnvelope{Type: "connection.restored", Ts: now, Payload: ev.Payload}
+		env.Type = "connection.restored"
+	default:
+		return nil
 	}
-	return nil
+	return env
 }
 
-// maybePushDivergenceSnapshot pushes the tracker's current report. With
-// force=true (e.g. a new (height,round,type) bucket just opened) the push
-// bypasses the time throttle; otherwise it fires at most every 150ms.
-func (h *wsHub) maybePushDivergenceSnapshot(force bool) {
+func (h *wsHub) pushDivergenceLocked() {
 	if h.tracker == nil {
 		return
 	}
-	const minIntervalNs = int64(150 * time.Millisecond)
-	now := time.Now().UnixNano()
-	if !force {
-		last := h.divLastPush.Load()
-		if now-last < minIntervalNs {
-			return
-		}
-		if !h.divLastPush.CompareAndSwap(last, now) {
-			return
-		}
-	} else {
-		h.divLastPush.Store(now)
-	}
 	rep := h.tracker.CurrentReport()
-	h.broadcast(wsEnvelope{
-		Type:    "divergence.snapshot",
-		Ts:      time.Now().UTC().Format(time.RFC3339Nano),
-		Payload: map[string]any{"live": rep.Live, "history": rep.History},
-	})
+	h.broadcastLocked(wsEnvelope{Type: "divergence.snapshot", Payload: map[string]any{"live": rep.Live, "history": rep.History}})
 }
 
-// packVoteKey collapses (height, round, type) into a single uint64 for cheap
-// atomic comparison.
-func packVoteKey(height, round, typ int64) uint64 {
-	return uint64(height)<<16 | uint64(round&0xFF)<<8 | uint64(typ&0xFF)
+func channelFor(kind string) string {
+	switch {
+	case kind == "vote.received":
+		return "votes"
+	case kind == "block.committed":
+		return "blocks"
+	case strings.HasPrefix(kind, "divergence."):
+		return "divergence"
+	default:
+		return "state"
+	}
 }
 
 func (h *wsHub) broadcast(env wsEnvelope) {
-	env.Seq = h.seq.Add(1)
+	h.dispatchMu.Lock()
+	defer h.dispatchMu.Unlock()
+	h.broadcastLocked(env)
+}
+func (h *wsHub) broadcastLocked(env wsEnvelope) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for c := range h.clients {
-		// Filter by subscription.
-		switch env.Type {
-		case "vote.received":
-			if !c.subs["votes"] {
-				continue
-			}
+		c.mu.Lock()
+		if c.subs[channelFor(env.Type)] {
+			c.queueLocked(env)
 		}
-		c.queue(env)
+		c.mu.Unlock()
+	}
+}
+func (h *wsHub) resync(c *wsClient) {
+	h.dispatchMu.Lock()
+	defer h.dispatchMu.Unlock()
+	c.queue(h.snapshot())
+}
+func (h *wsHub) closeClients() {
+	h.mu.RLock()
+	clients := make([]*wsClient, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+	for _, c := range clients {
+		c.close()
 	}
 }
 
-func (c *wsClient) queue(env wsEnvelope) {
+func (c *wsClient) queue(env wsEnvelope) { c.mu.Lock(); defer c.mu.Unlock(); c.queueLocked(env) }
+func (c *wsClient) queueLocked(env wsEnvelope) {
+	c.seq++
+	env.Seq = c.seq
+	if env.Ts == "" {
+		env.Ts = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	select {
+	case c.send <- env:
+		return
+	default:
+	}
+	// Every dropped message leaves a visible gap in this client's sequence.
+	// The browser requests resync and ignores patches until its snapshot arrives.
+	select {
+	case <-c.send:
+		c.dropped.Add(1)
+		metrics.RecordWSDrop(1)
+	default:
+	}
 	select {
 	case c.send <- env:
 	default:
-		// Drop oldest, push new. If still full, drop new and bump counter.
-		select {
-		case <-c.send:
-		default:
-		}
-		select {
-		case c.send <- env:
-			c.dropped.Add(1)
-		default:
-			c.dropped.Add(1)
-		}
+		c.dropped.Add(1)
+		metrics.RecordWSDrop(1)
 	}
 }
-
-func (c *wsClient) writePump() {
-	defer obs.Recover("ws.writePump")
-	pingT := time.NewTicker(wsPingPeriod)
-	defer func() {
-		pingT.Stop()
-		_ = c.conn.Close()
+func (c *wsClient) close() {
+	c.closeOnce.Do(func() {
+		if c.done != nil {
+			close(c.done)
+		}
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
 		c.hub.mu.Lock()
 		delete(c.hub.clients, c)
 		c.hub.mu.Unlock()
-	}()
+	})
+}
+func (c *wsClient) writePump() {
+	ping := time.NewTicker(wsPingPeriod)
+	defer ping.Stop()
+	defer c.close()
 	for {
 		select {
-		case env, ok := <-c.send:
+		case <-c.done:
+			return
+		case env := <-c.send:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-			if !ok {
-				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
 			if err := c.conn.WriteJSON(env); err != nil {
 				return
 			}
-		case <-pingT.C:
+		case <-ping.C:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
@@ -292,15 +301,11 @@ func (c *wsClient) writePump() {
 		}
 	}
 }
-
 func (c *wsClient) readPump() {
-	defer obs.Recover("ws.readPump")
+	defer c.close()
 	c.conn.SetReadLimit(64 * 1024)
 	_ = c.conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
-	c.conn.SetPongHandler(func(string) error {
-		_ = c.conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
-		return nil
-	})
+	c.conn.SetPongHandler(func(string) error { return c.conn.SetReadDeadline(time.Now().Add(wsReadTimeout)) })
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
@@ -309,22 +314,24 @@ func (c *wsClient) readPump() {
 		var cmd struct {
 			Type     string   `json:"type"`
 			Channels []string `json:"channels"`
-			Address  string   `json:"address"`
 		}
-		if err := json.Unmarshal(msg, &cmd); err != nil {
+		if json.Unmarshal(msg, &cmd) != nil {
 			continue
 		}
 		switch cmd.Type {
-		case "subscribe":
-			for _, ch := range cmd.Channels {
-				c.subs[ch] = true
+		case "subscribe", "unsubscribe":
+			c.mu.Lock()
+			for _, channel := range cmd.Channels {
+				switch channel {
+				case "state", "blocks", "divergence", "votes":
+					c.subs[channel] = cmd.Type == "subscribe"
+				}
 			}
-		case "unsubscribe":
-			for _, ch := range cmd.Channels {
-				delete(c.subs, ch)
-			}
+			c.mu.Unlock()
+		case "resync":
+			c.hub.resync(c)
 		case "ping":
-			c.queue(wsEnvelope{Type: "pong", Ts: time.Now().UTC().Format(time.RFC3339Nano)})
+			c.queue(wsEnvelope{Type: "pong"})
 		}
 	}
 }

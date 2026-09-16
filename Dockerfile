@@ -9,7 +9,7 @@ RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 WORKDIR /src/web
 COPY web/package.json web/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile || pnpm install
+RUN pnpm install --frozen-lockfile
 COPY web/ ./
 # vite.config.ts is configured to emit into ../internal/web/dist
 RUN pnpm build
@@ -29,7 +29,7 @@ COPY --from=web-builder /src/internal/web/dist /src/internal/web/dist
 
 ARG VERSION=docker
 RUN CGO_ENABLED=0 GOOS=linux \
-    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    go build -tags webui -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/cmt-top ./cmd/cmt-top
 
 # ---- Stage 3: runtime --------------------------------------------------------

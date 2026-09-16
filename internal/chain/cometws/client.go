@@ -47,13 +47,13 @@ type LifecycleHook func(state State, endpoint string, err error)
 
 // Client is a single-connection WS subscriber with auto-reconnect.
 type Client struct {
-	endpoints     []string
-	queries       []string
-	handler       Handler
-	onLifecycle   LifecycleHook
-	idleTimeout   time.Duration
-	maxBackoff    time.Duration
-	logger        *slog.Logger
+	endpoints   []string
+	queries     []string
+	handler     Handler
+	onLifecycle LifecycleHook
+	idleTimeout time.Duration
+	maxBackoff  time.Duration
+	logger      *slog.Logger
 
 	mu     sync.Mutex
 	state  State
@@ -111,6 +111,9 @@ func (c *Client) Run(ctx context.Context) {
 		err := c.connectAndPump(ctx, ep)
 		if errors.Is(err, context.Canceled) {
 			return
+		}
+		if c.State() == StateLive {
+			attempt = 0
 		}
 		c.setState(StateReconnecting, ep, err)
 		c.logger.Warn("ws disconnected", "endpoint", ep, "err", err)
@@ -179,9 +182,6 @@ func (c *Client) connectAndPump(ctx context.Context, endpoint string) error {
 		}
 	}
 
-	c.setState(StateLive, endpoint, nil)
-	c.logger.Info("ws live", "endpoint", endpoint, "subs", len(c.queries))
-
 	idle := time.NewTimer(c.idleTimeout)
 	defer idle.Stop()
 
@@ -204,8 +204,7 @@ func (c *Client) connectAndPump(ctx context.Context, endpoint string) error {
 			idle.Reset(c.idleTimeout)
 
 			if resp.Error != nil {
-				c.logger.Warn("ws error", "err", resp.Error)
-				continue
+				return fmt.Errorf("ws subscription: %s", resp.Error)
 			}
 			if len(resp.Result) == 0 {
 				continue // ack to subscribe
@@ -214,6 +213,13 @@ func (c *Client) connectAndPump(ctx context.Context, endpoint string) error {
 			if err != nil {
 				c.logger.Debug("ws decode", "err", err)
 				continue
+			}
+			if ev.Data == nil {
+				continue
+			}
+			if c.State() != StateLive {
+				c.setState(StateLive, endpoint, nil)
+				c.logger.Info("ws live", "endpoint", endpoint, "subs", len(c.queries))
 			}
 			c.handler(ev)
 		}

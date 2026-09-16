@@ -59,8 +59,8 @@ type VoteData struct {
 }
 
 type BlockID struct {
-	Hash          string         `json:"hash"`
-	PartSetHeader PartSetHeader  `json:"parts"`
+	Hash          string        `json:"hash"`
+	PartSetHeader PartSetHeader `json:"parts"`
 }
 
 type PartSetHeader struct {
@@ -95,9 +95,9 @@ type EventDataNewBlock struct {
 func (EventDataNewBlock) isEventData() {}
 
 type EventDataNewRound struct {
-	Height FlexInt `json:"height"`
-	Round  FlexInt `json:"round"`
-	Step   string  `json:"step"`
+	Height   FlexInt `json:"height"`
+	Round    FlexInt `json:"round"`
+	Step     string  `json:"step"`
 	Proposer struct {
 		Address string  `json:"address"`
 		Index   FlexInt `json:"index"`

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Go, web, and container checks
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Check clean Go checkout
+        run: go test -mod=readonly -race -timeout=10m ./...
+
+      - name: Check frontend
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm test
+          pnpm build
+
+      - name: Check bundled binary
+        run: |
+          go vet ./...
+          go test -mod=readonly -race -tags webui -timeout=10m ./...
+          go build -mod=readonly -tags webui -o bin/cmt-top ./cmd/cmt-top
+
+      - name: Set up cached Docker builder
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1.11.0
+
+      - name: Build test image
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2.2.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cmt-top:ci
+
+      - name: Smoke test documented container configuration
+        run: |
+          cp .env.example .env
+          cat > compose.ci.yml <<'YAML'
+          services:
+            cmt-top:
+              image: cmt-top:ci
+              pull_policy: never
+          YAML
+          docker compose -f docker-compose.yml -f compose.ci.yml up -d --wait --wait-timeout 90
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8080/healthz
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8080/ -o /tmp/cmt-top-index.html
+          grep -q '<div id="app"' /tmp/cmt-top-index.html
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9091/metrics
+
+      - name: Container logs and cleanup
+        if: always()
+        run: |
+          if [[ -f compose.ci.yml ]]; then
+            docker compose -f docker-compose.yml -f compose.ci.yml logs || true
+            docker compose -f docker-compose.yml -f compose.ci.yml down || true
+          fi

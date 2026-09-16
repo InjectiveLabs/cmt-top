@@ -5,6 +5,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +33,6 @@ type Chain struct {
 	LCD           string   `toml:"lcd"`            // Cosmos REST API for moniker / upgrade enrichment
 	MonitoredRPCs []string `toml:"monitored_rpcs"` // optional cross-RPC AppHash comparison (HTTP RPC URLs)
 	ExplorerURL   string   `toml:"explorer_url"`   // template: {address}
-	MintscanPath  string   `toml:"mintscan_path"`  // e.g. "injective"
 }
 
 type RPC struct {
@@ -47,15 +49,13 @@ type Refresh struct {
 }
 
 type Divergence struct {
-	ThresholdPct      float64 `toml:"threshold_pct"`
-	HistorySize       int     `toml:"history_size"`
-	Debounce          Duration `toml:"debounce"`
-	IncludePrevotes   bool    `toml:"include_prevotes"`
-	SimulateDivergence bool   `toml:"simulate_divergence"`
+	ThresholdPct    float64 `toml:"threshold_pct"`
+	HistorySize     int     `toml:"history_size"`
+	IncludePrevotes bool    `toml:"include_prevotes"`
 }
 
 type UI struct {
-	Mode string `toml:"mode"` // tui | web | both
+	Mode string `toml:"mode"` // tui | web | both | headless
 	TUI  TUI    `toml:"tui"`
 	Web  Web    `toml:"web"`
 }
@@ -66,10 +66,10 @@ type TUI struct {
 }
 
 type Web struct {
-	Listen    string `toml:"listen"`
-	Token     string `toml:"token"`
+	Listen     string `toml:"listen"`
+	Token      string `toml:"token"`
 	CORSOrigin string `toml:"cors_origin"`
-	Disabled  bool   `toml:"disabled"`
+	Disabled   bool   `toml:"disabled"`
 }
 
 type Obs struct {
@@ -100,15 +100,14 @@ func (d Duration) D() time.Duration { return time.Duration(d) }
 func Defaults() Config {
 	return Config{
 		Chain: Chain{
-			Name:         "injective-1",
+			Name:         "",
 			Bech32Prefix: "inj",
 			RPCs: []RPC{
 				{URL: "https://tm.injective.network", Primary: true},
 				{URL: "https://injective-rpc.publicnode.com:443"},
 			},
-			LCD:          "https://lcd.injective.network",
-			ExplorerURL:  "https://explorer.injective.network/validator/{address}",
-			MintscanPath: "injective",
+			LCD:         "https://lcd.injective.network",
+			ExplorerURL: "https://explorer.injective.network/validator/{address}",
 		},
 		Refresh: Refresh{
 			Validators:  Duration(30 * time.Second),
@@ -120,7 +119,6 @@ func Defaults() Config {
 		Divergence: Divergence{
 			ThresholdPct:    5.0,
 			HistorySize:     32,
-			Debounce:        Duration(250 * time.Millisecond),
 			IncludePrevotes: false,
 		},
 		UI: UI{
@@ -140,15 +138,20 @@ func Defaults() Config {
 // applied last by the caller (after this returns).
 func Load(path string) (Config, error) {
 	cfg := Defaults()
+	explicit := path != ""
 	if path == "" {
 		path = DefaultPath()
 	}
 	if path != "" {
 		if _, err := os.Stat(path); err == nil {
-			if _, err := toml.DecodeFile(path, &cfg); err != nil {
+			md, err := toml.DecodeFile(path, &cfg)
+			if err != nil {
 				return cfg, fmt.Errorf("decode %s: %w", path, err)
 			}
-		} else if !errors.Is(err, os.ErrNotExist) {
+			if keys := md.Undecoded(); len(keys) > 0 {
+				return cfg, fmt.Errorf("unknown configuration key %q in %s", keys[0].String(), path)
+			}
+		} else if explicit || !errors.Is(err, os.ErrNotExist) {
 			return cfg, fmt.Errorf("stat %s: %w", path, err)
 		}
 	}
@@ -231,8 +234,57 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("ui.mode must be one of tui|web|both|headless (got %q)", c.UI.Mode)
 	}
-	if c.Divergence.ThresholdPct < 0 || c.Divergence.ThresholdPct > 100 {
+	if math.IsNaN(c.Divergence.ThresholdPct) || math.IsInf(c.Divergence.ThresholdPct, 0) || c.Divergence.ThresholdPct < 0 || c.Divergence.ThresholdPct > 100 {
 		return errors.New("divergence.threshold_pct out of range")
+	}
+	for name, interval := range map[string]Duration{"validators": c.Refresh.Validators, "upgrade_plan": c.Refresh.UpgradePlan, "status": c.Refresh.Status, "block_time": c.Refresh.BlockTime, "consensus": c.Refresh.Consensus} {
+		if interval.D() <= 0 {
+			return fmt.Errorf("refresh.%s must be positive", name)
+		}
+	}
+	if c.Divergence.HistorySize < 1 {
+		return errors.New("divergence.history_size must be positive")
+	}
+	if c.UI.Web.Disabled && strings.EqualFold(c.UI.Mode, "web") {
+		return errors.New("ui.web.disabled is incompatible with web mode; use headless for metrics only")
+	}
+	for _, endpoint := range append(append([]string{}, c.Chain.MonitoredRPCs...), c.PrimaryRPC()) {
+		if err := validateURL(endpoint); err != nil {
+			return err
+		}
+	}
+	for _, rpc := range c.Chain.RPCs {
+		if err := validateURL(rpc.URL); err != nil {
+			return err
+		}
+	}
+	if c.Chain.LCD != "" {
+		if err := validateURL(c.Chain.LCD); err != nil {
+			return err
+		}
+	}
+	if c.Chain.ExplorerURL != "" {
+		if err := validateURL(strings.ReplaceAll(c.Chain.ExplorerURL, "{address}", "validator")); err != nil {
+			return err
+		}
+	}
+	if c.UI.Web.Listen != "" {
+		if _, _, err := net.SplitHostPort(c.UI.Web.Listen); err != nil {
+			return fmt.Errorf("ui.web.listen: %w", err)
+		}
+	}
+	if c.Obs.MetricsListen != "" {
+		if _, _, err := net.SplitHostPort(c.Obs.MetricsListen); err != nil {
+			return fmt.Errorf("obs.metrics_listen: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateURL(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("invalid HTTP endpoint %q", endpoint)
 	}
 	return nil
 }

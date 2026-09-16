@@ -20,7 +20,6 @@ web/.vite/
 # Embedded SPA — rebuilt inside the image
 internal/web/dist/*
 !internal/web/dist/.gitkeep
-!internal/web/dist/stub.html
 
 # Tests / dev tooling
 **/testdata/

@@ -1,6 +1,6 @@
-// Package core is the orchestrator: the single goroutine that mutates state
-// and publishes events. WS events and HTTP poller results funnel into one
-// dispatch loop, replacing tmtop's six-goroutine app.go.
+// Package core coordinates WS observations and bounded HTTP polling. Shared
+// consensus transitions run under the state's write lock so every source uses
+// the same stale-event guards and validator identity rules.
 package core
 
 import (
@@ -10,20 +10,21 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 
-	"github.com/Ri-go/cmt-top/internal/chain/cometrpc"
-	"github.com/Ri-go/cmt-top/internal/chain/cometws"
-	"github.com/Ri-go/cmt-top/internal/config"
-	"github.com/Ri-go/cmt-top/internal/cosmos"
-	"github.com/Ri-go/cmt-top/internal/divergence"
-	"github.com/Ri-go/cmt-top/internal/events"
-	"github.com/Ri-go/cmt-top/internal/obs"
-	"github.com/Ri-go/cmt-top/internal/state"
+	"github.com/InjectiveLabs/cmt-top/internal/chain/cometrpc"
+	"github.com/InjectiveLabs/cmt-top/internal/chain/cometws"
+	"github.com/InjectiveLabs/cmt-top/internal/config"
+	"github.com/InjectiveLabs/cmt-top/internal/cosmos"
+	"github.com/InjectiveLabs/cmt-top/internal/divergence"
+	"github.com/InjectiveLabs/cmt-top/internal/events"
+	"github.com/InjectiveLabs/cmt-top/internal/metrics"
+	"github.com/InjectiveLabs/cmt-top/internal/obs"
+	"github.com/InjectiveLabs/cmt-top/internal/state"
 )
 
 // Orchestrator wires the chain client, state, event bus, and divergence tracker.
@@ -38,10 +39,9 @@ type Orchestrator struct {
 	q   *cosmos.Querier
 	div *divergence.Tracker
 
-	wsEvents chan cometws.Event
-
-	mu                sync.Mutex
-	chainValByConsHex map[string]*state.ChainValidator
+	wsEvents         chan cometws.Event
+	validatorRefresh chan struct{}
+	comparisonPools  map[string]*cometrpc.Pool
 }
 
 // New builds an Orchestrator. It does not start any goroutines; call Run.
@@ -81,17 +81,31 @@ func New(cfg config.Config, bus *events.Bus, st *state.State) (*Orchestrator, er
 			default:
 				select {
 				case <-wsCh:
+					metrics.RecordIngestDrop(1)
 				default:
 				}
 				select {
 				case wsCh <- ev:
 				default:
+					metrics.RecordIngestDrop(1)
 				}
 			}
 		},
 		OnLifecycle: func(s cometws.State, ep string, err error) {
+			st.Mutate(func(data *state.StateData) {
+				data.WSConnected = s == cometws.StateLive
+				data.Health.WSConnected = data.WSConnected
+				data.Health.WSEndpoint = ep
+				if err != nil {
+					data.Health.LastError = err.Error()
+				}
+				if s == cometws.StateLive {
+					data.Health.LastError = ""
+				}
+			})
 			switch s {
 			case cometws.StateLive:
+				pool.SetActive(ep)
 				bus.Publish(events.Event{Kind: events.KindConnectionRestored, Payload: events.ConnectionRestored{Endpoint: ep}})
 			case cometws.StateReconnecting:
 				bus.Publish(events.Event{Kind: events.KindConnectionLost, Payload: events.ConnectionLost{Endpoint: ep, Err: err}})
@@ -116,18 +130,33 @@ func New(cfg config.Config, bus *events.Bus, st *state.State) (*Orchestrator, er
 		HistorySize:     cfg.Divergence.HistorySize,
 		IncludePrevotes: cfg.Divergence.IncludePrevotes,
 	})
+	comparisonPools := make(map[string]*cometrpc.Pool)
+	if len(cfg.Chain.MonitoredRPCs) > 0 {
+		for _, endpoint := range append([]string{cfg.PrimaryRPC()}, cfg.Chain.MonitoredRPCs...) {
+			if _, exists := comparisonPools[endpoint]; exists {
+				continue
+			}
+			p, err := cometrpc.NewPool([]cometrpc.Endpoint{{URL: endpoint, Primary: true}})
+			if err != nil {
+				return nil, fmt.Errorf("monitored RPC %s: %w", endpoint, err)
+			}
+			comparisonPools[endpoint] = p
+		}
+		st.Mutate(func(data *state.StateData) { data.RPCComparison.Status = "incomplete" })
+	}
 
 	return &Orchestrator{
-		cfg:               cfg,
-		bus:               bus,
-		state:             st,
-		log:               logger,
-		rpc:               pool,
-		ws:                wsClient,
-		q:                 q,
-		div:               tracker,
-		wsEvents:          wsCh,
-		chainValByConsHex: map[string]*state.ChainValidator{},
+		cfg:              cfg,
+		bus:              bus,
+		state:            st,
+		log:              logger,
+		rpc:              pool,
+		ws:               wsClient,
+		q:                q,
+		div:              tracker,
+		wsEvents:         wsCh,
+		validatorRefresh: make(chan struct{}, 1),
+		comparisonPools:  comparisonPools,
 	}, nil
 }
 
@@ -174,12 +203,15 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		}
 	})
 	go o.pollLoop(ctx, "consensus", o.cfg.Refresh.Consensus.D(), func(c context.Context) {
-		if o.ws.State() != cometws.StateLive {
+		if o.ws.State() != cometws.StateLive || o.state.Snapshot().Health.Mode != "streaming" {
 			if err := o.refreshConsensusViaHTTP(c); err != nil {
 				o.log.Debug("consensus http fallback failed", "err", err)
 			}
 		}
 	})
+	if len(o.comparisonPools) > 0 {
+		go o.pollLoop(ctx, "rpc_comparison", o.cfg.Refresh.Status.D(), o.refreshRPCComparison)
+	}
 
 	go func() {
 		defer obs.Recover("ws.run")
@@ -203,13 +235,24 @@ func (o *Orchestrator) pollLoop(ctx context.Context, name string, every time.Dur
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
-	fn(ctx) // run once immediately
+	run := func() {
+		pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		fn(pollCtx)
+	}
+	var wake <-chan struct{}
+	if name == "validators" {
+		wake = o.validatorRefresh
+	}
+	run() // run once immediately
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			fn(ctx)
+			run()
+		case <-wake:
+			run()
 		}
 	}
 }
@@ -217,6 +260,13 @@ func (o *Orchestrator) pollLoop(ctx context.Context, name string, every time.Dur
 // ---------- WS event handling ----------
 
 func (o *Orchestrator) handleWSEvent(ev cometws.Event) {
+	now := time.Now()
+	o.state.Mutate(func(s *state.StateData) {
+		s.Health.LastEventAt = now
+		s.Health.LastSuccessAt = now
+		s.Health.LastError = ""
+		s.ConsensusError = nil
+	})
 	switch d := ev.Data.(type) {
 	case cometws.EventDataNewBlock:
 		o.handleNewBlock(d)
@@ -225,83 +275,79 @@ func (o *Orchestrator) handleWSEvent(ev cometws.Event) {
 	case cometws.EventDataVote:
 		o.handleVote(d.Vote)
 	case cometws.EventDataValidatorSetUpdates:
-		o.bus.Publish(events.Event{Kind: events.KindValidatorSetUpdated, Payload: events.ValidatorSetUpdated{}})
+		select {
+		case o.validatorRefresh <- struct{}{}:
+		default:
+		}
 	}
 }
 
 func (o *Orchestrator) handleNewBlock(d cometws.EventDataNewBlock) {
 	h := int64(d.Block.Header.Height)
-	if h == 0 {
+	if h <= 0 {
 		return
 	}
 	blockIDHash := strings.ToLower(d.BlockID.Hash)
 	appHash := strings.ToLower(d.Block.Header.AppHash)
 	proposer := strings.ToUpper(d.Block.Header.ProposerAddress)
-
+	accepted := false
 	o.state.Mutate(func(s *state.StateData) {
-		s.Height = h
-		s.Round = 0
-		s.Step = 0
-		s.StartTime = d.Block.Header.Time
-		// Mark this height closed so late vote stragglers don't repaint the
-		// just-cleared live row.
+		if h < s.LastCommittedHeight {
+			return
+		}
+		for _, sample := range s.Blocks {
+			if sample.Height == h {
+				return
+			}
+		}
+		accepted = true
 		if h > s.LastCommittedHeight {
 			s.LastCommittedHeight = h
 		}
-		clearRoundVotes(s.LastRound)
-		// NewRound fires sporadically on some chains (Injective skips most
-		// events). NewBlock always fires reliably and carries the proposer of
-		// the just-committed block, so use it as the proposer source. NewRound,
-		// when it does fire, will override with the next round's proposer.
-		markProposer(s.LastRound, proposer)
+		appendBlock(s, state.BlockSample{Height: h, Time: d.Block.Header.Time,
+			BlockIDHash: blockIDHash, AppHash: appHash, NumTxs: len(d.Block.Data.Txs)})
+		// The next height has no observed proposer yet. Do not attribute the
+		// committed block's proposer to its successor.
+		advanceRound(s, h+1, 0, 1)
 	})
-
-	o.bus.Publish(events.Event{
-		Kind: events.KindNewBlock,
-		Payload: events.NewBlock{
-			Height:       h,
-			BlockIDHash:  blockIDHash,
-			AppHash:      appHash,
-			ProposerAddr: proposer,
-			Time:         d.Block.Header.Time,
-			NumTxs:       len(d.Block.Data.Txs),
-		},
-	})
-
+	if !accepted {
+		return
+	}
 	resolved := o.div.ResolveCommit(h, blockIDHash)
+	o.bus.Publish(events.Event{Kind: events.KindNewBlock, Payload: events.NewBlock{
+		Height: h, BlockIDHash: blockIDHash, AppHash: appHash,
+		ProposerAddr: proposer, Time: d.Block.Header.Time, NumTxs: len(d.Block.Data.Txs),
+	}})
 	for _, r := range resolved {
 		if r.IsDivergent {
 			o.bus.Publish(events.Event{Kind: events.KindDivergenceResolved, Payload: r})
 		}
 	}
-	o.div.MarkRoundAdvanced(h-1, 0)
 }
 
 func (o *Orchestrator) handleNewRound(d cometws.EventDataNewRound) {
+	height, round := int64(d.Height), int64(d.Round)
 	step := stepFromString(d.Step)
 	proposer := strings.ToUpper(d.Proposer.Address)
+	accepted := false
+	var started time.Time
 	o.state.Mutate(func(s *state.StateData) {
-		s.Height = int64(d.Height)
-		s.Round = int64(d.Round)
-		s.Step = step
-		// New round starts: clear last round's votes and mark the proposer.
-		clearRoundVotes(s.LastRound)
-		if s.LastRound != nil {
-			s.LastRound.Round = int64(d.Round)
+		accepted = advanceRound(s, height, round, step)
+		if !accepted {
+			return
 		}
 		markProposer(s.LastRound, proposer)
+		started = s.StartTime
 	})
-	o.bus.Publish(events.Event{
-		Kind: events.KindRoundChanged,
-		Payload: events.RoundChanged{
-			Height:   int64(d.Height),
-			Round:    int64(d.Round),
-			Step:     step,
-			Proposer: proposer,
-		},
-	})
-	if d.Round > 0 {
-		o.div.MarkRoundAdvanced(int64(d.Height), int64(d.Round)-1)
+	if !accepted {
+		return
+	}
+	o.div.ObserveRound(height, round, proposer)
+	o.bus.Publish(events.Event{Kind: events.KindRoundChanged, Payload: events.RoundChanged{
+		Height: height, Round: round, Step: step, StartTime: started, Proposer: proposer,
+	}})
+	if round > 0 {
+		o.div.MarkRoundAdvanced(height, round-1)
 	}
 }
 
@@ -334,81 +380,64 @@ func (o *Orchestrator) handleVote(v cometws.VoteData) {
 	hash := strings.ToLower(v.BlockID.Hash)
 	var vt divergence.VoteType
 	var pvt cmtproto.SignedMsgType
+	var step int64
 	switch v.Type {
 	case cometws.VoteTypePrevote:
-		vt = divergence.Prevote
-		pvt = cmtproto.PrevoteType
+		vt, pvt, step = divergence.Prevote, cmtproto.PrevoteType, 4
 	case cometws.VoteTypePrecommit:
-		vt = divergence.Precommit
-		pvt = cmtproto.PrecommitType
+		vt, pvt, step = divergence.Precommit, cmtproto.PrecommitType, 6
 	default:
 		return
 	}
-	rep, trigger := o.div.IngestVote(divergence.VoteEvent{
-		Height:        int64(v.Height),
-		Round:         int64(v.Round),
-		Type:          vt,
-		ValidatorAddr: addr,
-		BlockIDHash:   hash,
-		Timestamp:     v.Timestamp,
+	// Preserve retained historical and conflicting observations independently of
+	// the live dashboard's stale-event and first-vote guards.
+	o.div.ObserveVote(divergence.VoteEvent{
+		Height: int64(v.Height), Round: int64(v.Round), Type: vt,
+		ValidatorAddr: addr, BlockIDHash: hash, Timestamp: v.Timestamp,
 	})
-
-	// Reflect the vote into per-validator state so both UIs render it. Skip
-	// votes from older rounds — late arrivals shouldn't overwrite the live row.
 	kind := state.VoteForBlock
 	if hash == "" {
 		kind = state.VoteNil
 	}
+	accepted := false
 	o.state.Mutate(func(s *state.StateData) {
-		if s.LastRound == nil {
+		accepted = advanceRound(s, int64(v.Height), int64(v.Round), step)
+		if !accepted || s.LastRound == nil {
 			return
-		}
-		// Reject stragglers from heights that have already committed.
-		if int64(v.Height) <= s.LastCommittedHeight {
-			return
-		}
-		// Stale-round guard within the same height.
-		if int64(v.Height) == s.Height && int64(v.Round) < s.LastRound.Round {
-			return
-		}
-		// Round advanced (we missed a NewRound) — clear stale votes for the
-		// previous round, but DO NOT clear the proposer flag (NewBlock just
-		// set it and there's no fresher source).
-		if int64(v.Round) > s.LastRound.Round {
-			for i := range s.LastRound.Validators {
-				s.LastRound.Validators[i].RoundVote.Prevote = state.Vote{}
-				s.LastRound.Validators[i].RoundVote.Precommit = state.Vote{}
-			}
-			s.LastRound.Round = int64(v.Round)
-			s.Round = int64(v.Round)
 		}
 		for i := range s.LastRound.Validators {
-			if s.LastRound.Validators[i].Validator.Address != addr {
+			row := &s.LastRound.Validators[i]
+			if row.Validator.Address != addr {
 				continue
 			}
 			cell := state.Vote{Kind: kind, BlockIDHash: hash, Timestamp: v.Timestamp}
-			switch vt {
-			case divergence.Prevote:
-				s.LastRound.Validators[i].RoundVote.Prevote = cell
-			case divergence.Precommit:
-				s.LastRound.Validators[i].RoundVote.Precommit = cell
+			// Keep the first observation, matching the tracker's deduplication.
+			if vt == divergence.Prevote && row.RoundVote.Prevote.Kind != state.VoteAbsent || vt == divergence.Precommit && row.RoundVote.Precommit.Kind != state.VoteAbsent {
+				accepted = false
+				return
+			}
+			if vt == divergence.Prevote && row.RoundVote.Prevote.Kind == state.VoteAbsent {
+				row.RoundVote.Prevote = cell
+			}
+			if vt == divergence.Precommit && row.RoundVote.Precommit.Kind == state.VoteAbsent {
+				row.RoundVote.Precommit = cell
 			}
 			break
 		}
 	})
-
-	o.bus.Publish(events.Event{
-		Kind: events.KindVoteReceived,
-		Payload: events.VoteReceived{
-			Height:        int64(v.Height),
-			Round:         int64(v.Round),
-			Type:          pvt,
-			ValidatorAddr: addr,
-			BlockIDHash:   hash,
-			Timestamp:     v.Timestamp,
-		},
+	// Stale events are not forwarded: every consumer sees the same acceptance
+	// decision as the authoritative state.
+	if !accepted {
+		return
+	}
+	rep, trigger := o.div.IngestVote(divergence.VoteEvent{
+		Height: int64(v.Height), Round: int64(v.Round), Type: vt,
+		ValidatorAddr: addr, BlockIDHash: hash, Timestamp: v.Timestamp,
 	})
-
+	o.bus.Publish(events.Event{Kind: events.KindVoteReceived, Payload: events.VoteReceived{
+		Height: int64(v.Height), Round: int64(v.Round), Type: pvt,
+		ValidatorAddr: addr, BlockIDHash: hash, Timestamp: v.Timestamp,
+	}})
 	if trigger {
 		o.bus.Publish(events.Event{Kind: events.KindDivergenceDetected, Payload: rep})
 	}
@@ -417,9 +446,15 @@ func (o *Orchestrator) handleVote(v cometws.VoteData) {
 // ---------- HTTP pollers ----------
 
 func (o *Orchestrator) refreshStatus(ctx context.Context) error {
-	st, _, err := o.rpc.Status(ctx)
+	st, endpoint, err := o.rpc.Status(ctx)
 	if err != nil {
-		o.state.Mutate(func(s *state.StateData) { s.StatusError = err })
+		o.state.Mutate(func(s *state.StateData) { s.StatusError = err; s.Health.LastError = err.Error() })
+		return err
+	}
+	previous := o.state.Snapshot()
+	if previous.NodeStatus != nil && previous.NodeStatus.Network != st.NodeInfo.Network {
+		err := fmt.Errorf("RPC chain %q differs from established chain %q", st.NodeInfo.Network, previous.NodeStatus.Network)
+		o.state.Mutate(func(s *state.StateData) { s.StatusError = err; s.Health.LastError = err.Error() })
 		return err
 	}
 	ourAddr := strings.ToUpper(hex.EncodeToString(st.ValidatorInfo.Address))
@@ -435,7 +470,18 @@ func (o *Orchestrator) refreshStatus(ctx context.Context) error {
 	o.state.Mutate(func(s *state.StateData) {
 		s.StatusError = nil
 		s.NodeStatus = ns
-		s.ActiveRPC = o.rpc.Active()
+		recordHTTPSuccess(s, endpoint)
+		if ns.LatestHeight > s.LastCommittedHeight {
+			s.LastCommittedHeight = ns.LatestHeight
+			if s.Height > 0 && s.Height <= ns.LatestHeight {
+				clearRoundVotes(s.LastRound)
+				s.Height, s.Round, s.Step = 0, 0, 0
+				s.StartTime = time.Time{}
+				if s.LastRound != nil {
+					s.LastRound.Round = 0
+				}
+			}
+		}
 	})
 	o.bus.Publish(events.Event{Kind: events.KindStatusUpdated, Payload: events.StatusUpdated{
 		Network:      ns.Network,
@@ -444,12 +490,24 @@ func (o *Orchestrator) refreshStatus(ctx context.Context) error {
 		CatchingUp:   ns.CatchingUp,
 		LatestHeight: ns.LatestHeight,
 	}})
+	// Seed retained history on startup and keep it moving when only HTTP is
+	// available. A status height alone never invents an active consensus round.
+	if len(previous.Blocks) == 0 || !previous.Health.WSConnected {
+		if err := o.refreshLatestBlock(ctx, ns.LatestHeight); err != nil {
+			o.log.Debug("block history refresh failed", "err", err)
+		}
+	}
 	return nil
 }
 
 func (o *Orchestrator) refreshValidators(ctx context.Context) error {
 	vs, height, _, err := o.rpc.AllValidators(ctx, nil)
 	if err != nil {
+		o.state.Mutate(func(s *state.StateData) { s.ValidatorsError = err })
+		return err
+	}
+	if len(vs) == 0 {
+		err := fmt.Errorf("RPC returned an empty validator set")
 		o.state.Mutate(func(s *state.StateData) { s.ValidatorsError = err })
 		return err
 	}
@@ -462,6 +520,7 @@ func (o *Orchestrator) refreshValidators(ctx context.Context) error {
 	chainVals, err := o.q.Validators(ctx)
 	if err != nil {
 		o.log.Debug("LCD validators failed", "err", err)
+		chainVals = o.state.Snapshot().ChainValidators
 	}
 	cvByCons := map[string]*state.ChainValidator{}
 	for i := range chainVals {
@@ -495,33 +554,21 @@ func (o *Orchestrator) refreshValidators(ctx context.Context) error {
 		vwInfo = append(vwInfo, row)
 	}
 
-	o.div.SetValidators(dvs)
-
-	o.mu.Lock()
-	o.chainValByConsHex = cvByCons
-	o.mu.Unlock()
-
 	cvSlice := append([]state.ChainValidator(nil), chainVals...)
 
-	rv := &state.RoundView{
-		Round:      0,
-		Validators: vwInfo,
-		TotalVP:    totalPow,
-	}
-
+	accepted := false
 	o.state.Mutate(func(s *state.StateData) {
+		accepted = mergeValidatorRound(s, vwInfo, totalPow, height)
+		if !accepted {
+			return
+		}
 		s.ValidatorsError = nil
 		s.ChainValidators = cvSlice
-		if s.LastRound == nil || len(s.LastRound.Validators) != len(vwInfo) {
-			s.LastRound = rv
-		} else {
-			for i := range s.LastRound.Validators {
-				s.LastRound.Validators[i].Validator = vwInfo[i].Validator
-				s.LastRound.Validators[i].ChainValidator = vwInfo[i].ChainValidator
-			}
-		}
 	})
-
+	if !accepted {
+		return nil
+	}
+	o.div.SetValidators(dvs)
 	o.bus.Publish(events.Event{Kind: events.KindValidatorSetUpdated, Payload: events.ValidatorSetUpdated{Height: height}})
 	return nil
 }
@@ -536,11 +583,11 @@ func (o *Orchestrator) refreshUpgrade(ctx context.Context) error {
 		s.UpgradeError = nil
 		s.Upgrade = plan
 	})
+	update := events.UpgradePlanUpdated{}
 	if plan != nil {
-		o.bus.Publish(events.Event{Kind: events.KindUpgradePlanUpdated, Payload: events.UpgradePlanUpdated{
-			Name: plan.Name, Height: plan.Height,
-		}})
+		update.Name, update.Height = plan.Name, plan.Height
 	}
+	o.bus.Publish(events.Event{Kind: events.KindUpgradePlanUpdated, Payload: update})
 	return nil
 }
 
@@ -568,28 +615,97 @@ func (o *Orchestrator) refreshBlockTime(ctx context.Context) error {
 	return nil
 }
 
-func (o *Orchestrator) refreshConsensusViaHTTP(ctx context.Context) error {
-	res, _, err := o.rpc.ConsensusState(ctx)
+func (o *Orchestrator) refreshConsensusViaHTTP(ctx context.Context) (retErr error) {
+	defer func() {
+		if retErr != nil {
+			o.state.Mutate(func(s *state.StateData) {
+				if s.Health.ModeAt(time.Now()) == "streaming" {
+					return
+				}
+				s.ConsensusError = retErr
+				s.Health.LastError = retErr.Error()
+			})
+		}
+	}()
+	res, endpoint, err := o.rpc.ConsensusState(ctx)
 	if err != nil {
-		o.state.Mutate(func(s *state.StateData) { s.ConsensusError = err })
 		return err
 	}
-	// res.RoundState is json.RawMessage; parse just the height/round/step.
 	var rs struct {
 		HeightRoundStep string `json:"height/round/step"`
 	}
 	if err := jsonUnmarshal(res.RoundState, &rs); err != nil {
 		return err
 	}
-	o.state.Mutate(func(s *state.StateData) {
-		s.ConsensusError = nil
-		parts := strings.Split(rs.HeightRoundStep, "/")
-		if len(parts) == 3 {
-			s.Height = parseI64(parts[0])
-			s.Round = parseI64(parts[1])
-			s.Step = parseI64(parts[2])
+	parts := strings.Split(rs.HeightRoundStep, "/")
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid consensus height/round/step %q", rs.HeightRoundStep)
+	}
+	values := make([]int64, 3)
+	for i, part := range parts {
+		value, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || value < 0 {
+			return fmt.Errorf("invalid consensus height/round/step %q", rs.HeightRoundStep)
 		}
+		values[i] = value
+	}
+	if values[0] == 0 {
+		return fmt.Errorf("consensus height is zero")
+	}
+	accepted := false
+	var started time.Time
+	o.state.Mutate(func(s *state.StateData) {
+		if s.Health.ModeAt(time.Now()) == "streaming" {
+			// WS can recover while a fallback request is in flight. A delayed
+			// response must not replace fresh consensus observations.
+			return
+		}
+		s.ConsensusError = nil
+		recordHTTPSuccess(s, endpoint)
+		accepted = advanceRound(s, values[0], values[1], values[2])
+		if accepted && s.Health.ModeAt(time.Now()) != "streaming" {
+			// Compact HTTP consensus has no trustworthy per-validator vote
+			// snapshot. Old WS observations must not look current in fallback.
+			clearRoundVotes(s.LastRound)
+		}
+		started = s.StartTime
 	})
+	if accepted {
+		o.div.ObserveRound(values[0], values[1], "")
+		o.bus.Publish(events.Event{Kind: events.KindRoundChanged, Payload: events.RoundChanged{
+			Height: values[0], Round: values[1], Step: values[2], StartTime: started,
+		}})
+	}
+	return nil
+}
+
+func (o *Orchestrator) refreshLatestBlock(ctx context.Context, height int64) error {
+	if height <= 0 {
+		return nil
+	}
+	before := o.state.Snapshot()
+	if len(before.Blocks) > 0 && before.Blocks[len(before.Blocks)-1].Height >= height {
+		return nil
+	}
+	res, endpoint, err := o.rpc.Block(ctx, &height)
+	if err != nil {
+		return err
+	}
+	if res.Block == nil || res.Block.Height != height {
+		return fmt.Errorf("RPC did not return block %d", height)
+	}
+	if before.NodeStatus != nil && res.Block.ChainID != before.NodeStatus.Network {
+		return fmt.Errorf("block chain differs from status chain")
+	}
+	sample := state.BlockSample{Height: height, Time: res.Block.Time, BlockIDHash: hex.EncodeToString(res.BlockID.Hash),
+		AppHash: hex.EncodeToString(res.Block.AppHash), NumTxs: len(res.Block.Txs)}
+	o.state.Mutate(func(s *state.StateData) { appendBlock(s, sample); recordHTTPSuccess(s, endpoint) })
+	for _, report := range o.div.ResolveCommit(height, sample.BlockIDHash) {
+		if report.IsDivergent {
+			o.bus.Publish(events.Event{Kind: events.KindDivergenceResolved, Payload: report})
+		}
+	}
+	o.bus.Publish(events.Event{Kind: events.KindStatusUpdated, Payload: events.StatusUpdated{LatestHeight: height}})
 	return nil
 }
 

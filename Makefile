@@ -19,19 +19,19 @@ help:
 	@echo "  lint           run golangci-lint (if installed)"
 	@echo "  tidy           go mod tidy"
 	@echo "  clean          remove build artifacts"
-	@echo "  e2e            run e2e tests (CMTOP_E2E=1)"
+	@echo "  e2e            run local RPC/WS integration tests"
 
 web:
 	@if [ -d web ] && [ -f web/package.json ]; then \
 		echo "==> building web bundle"; \
-		cd web && (pnpm install --frozen-lockfile || pnpm install) && pnpm build; \
+		cd web && pnpm install --frozen-lockfile && pnpm build; \
 	else \
 		echo "==> web/ not present, skipping"; \
 	fi
 
 build: web
 	@mkdir -p bin
-	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/cmt-top
+	$(GO) build -tags webui -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/cmt-top
 	@echo "==> built $(BIN)"
 
 build-no-web:
@@ -49,10 +49,11 @@ test-race:
 	$(GO) test -race $(PKG)
 
 e2e:
-	CMTOP_E2E=1 $(GO) test -count=1 ./internal/chain/... ./internal/divergence/...
+	$(GO) test -race -count=1 ./internal/chain/... ./internal/core/... ./internal/web/...
 
 lint:
-	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run --fix $(PKG) || echo "golangci-lint not installed"
+	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint not installed"; exit 1; }
+	golangci-lint run $(PKG)
 
 fmt:
 	$(GO) fmt $(PKG)

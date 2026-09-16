@@ -1,17 +1,28 @@
-export async function fetchSnapshot(token?: string) {
+export class APIError extends Error {
+  constructor(public status: number) {
+    super(
+      status === 401
+        ? "Enter a valid access token to connect."
+        : `Dashboard request failed (${status}).`,
+    );
+  }
+}
+export async function fetchSnapshot(token?: string, signal?: AbortSignal): Promise<unknown> {
   const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  const r = await fetch("/api/state", { headers });
-  if (!r.ok) throw new Error(`/api/state ${r.status}`);
-  return r.json();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch("/api/state", { headers, signal });
+  if (!response.ok) throw new APIError(response.status);
+  return response.json();
 }
 
-export async function fetchValidators(search?: string, token?: string) {
+export async function fetchBlockRounds(
+  height: number,
+  token?: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
   const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  const u = new URL("/api/validators", location.origin);
-  if (search) u.searchParams.set("search", search);
-  const r = await fetch(u.toString(), { headers });
-  if (!r.ok) throw new Error(`/api/validators ${r.status}`);
-  return r.json();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`/api/blocks/${height}/rounds`, { headers, signal });
+  if (!response.ok) throw new APIError(response.status);
+  return response.json();
 }

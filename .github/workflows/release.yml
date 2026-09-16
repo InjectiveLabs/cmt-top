@@ -1,89 +1,89 @@
-name: release
+name: Release Docker image
 
-# Triggers:
-#   - A GitHub Release is published (UI flow): builds & pushes the image,
-#     tagged with the release version + `latest` if it's not a pre-release.
-#   - A semver tag is pushed (`vX.Y.Z`): same behaviour, lets you cut a release
-#     entirely from the CLI without going through the Releases UI.
-#   - Manual dispatch: builds & pushes a one-off image tagged with the chosen
-#     ref name. Useful for testing the workflow itself.
 on:
-  release:
-    types: [published]
   push:
-    tags: ["v*.*.*"]
+    tags: ["v**"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  REGISTRY: docker.io
-  IMAGE: 0xrigo/cmt-top
+  ECR_REPO: public.ecr.aws/l9h3g6c6/cmt-top
+  AWS_REGION: us-east-1
 
 jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   docker:
-    runs-on: ubuntu-latest
+    name: Publish linux/amd64 image
+    needs: checks
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 90
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Don't leave the GITHUB_TOKEN in .git/config for later steps.
           persist-credentials: false
-          # We resolve the version from the tag below, so a shallow clone is
-          # sufficient — no `git describe` needed.
-          fetch-depth: 1
 
-      - name: Resolve version
-        id: version
+      - name: Validate release configuration and tags
+        id: release
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
         run: |
-          # Prefer the release tag / pushed tag; fall back to short SHA for
-          # manual runs.
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-          elif [[ -n "${{ github.event.release.tag_name }}" ]]; then
-            VERSION="${{ github.event.release.tag_name }}"
-          else
-            VERSION="$(git rev-parse --short HEAD)"
+          if [[ -z "$AWS_ROLE_ARN" ]]; then
+            echo "::error::Set the AWS_ROLE_ARN repository variable to the cmt-top ECR publishing role."
+            exit 1
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${VERSION}"
+          if (( ${#GITHUB_REF_NAME} > 128 )) || [[ "$GITHUB_REF_TYPE" != tag ]] || [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Release from a version tag, such as v1.2.3 or v1.2.3-rc.1."
+            exit 1
+          fi
+          {
+            echo 'tags<<EOF'
+            echo "${ECR_REPO}:${GITHUB_REF_NAME}"
+            if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "${ECR_REPO}:latest"
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Set up cached Docker builder
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1.11.0
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
 
-      - name: Compute image tags
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Log in to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2.1.6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
-          tags: |
-            type=semver,pattern={{raw}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
-            type=sha,format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
+          registry-type: public
+
+      - name: Build and push
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2.2.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.release.outputs.tags }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
           labels: |
             org.opencontainers.image.title=cmt-top
             org.opencontainers.image.description=Live dashboard for CometBFT-based Cosmos chains
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.licenses=MIT
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

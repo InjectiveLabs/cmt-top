@@ -15,24 +15,26 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/httprate"
 
-	"github.com/Ri-go/cmt-top/internal/divergence"
-	"github.com/Ri-go/cmt-top/internal/events"
-	"github.com/Ri-go/cmt-top/internal/obs"
-	"github.com/Ri-go/cmt-top/internal/state"
+	"github.com/InjectiveLabs/cmt-top/internal/divergence"
+	"github.com/InjectiveLabs/cmt-top/internal/events"
+	"github.com/InjectiveLabs/cmt-top/internal/obs"
+	"github.com/InjectiveLabs/cmt-top/internal/state"
 )
 
 // Options configure the web server.
 type Options struct {
-	Listen     string
-	Token      string
-	CORSOrigin string
-	State      *state.State
-	Bus        *events.Bus
-	Tracker    *divergence.Tracker
-	Logger     *slog.Logger
-	Ring       *obs.Ring
-	Version    string
-	Ready      func() bool
+	Listen      string
+	Token       string
+	CORSOrigin  string
+	DisplayName string
+	ExplorerURL string
+	State       *state.State
+	Bus         *events.Bus
+	Tracker     *divergence.Tracker
+	Logger      *slog.Logger
+	Ring        *obs.Ring
+	Version     string
+	Ready       func() bool
 }
 
 // Server is the HTTP server.
@@ -47,11 +49,13 @@ func New(opts Options) *Server {
 		opts.Logger = slog.Default()
 	}
 	hub := newWSHub(opts.Bus, opts.State, opts.Tracker, opts.Logger.With("c", "wshub"), opts.CORSOrigin)
+	hub.explorerURL = opts.ExplorerURL
+	hub.displayName = opts.DisplayName
 	return &Server{opts: opts, hub: hub}
 }
 
-// Run starts the server. Blocks until ctx is cancelled.
-func (s *Server) Run(ctx context.Context) error {
+// Handler builds the HTTP surface, also used by local integration tests.
+func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(bodySizeLimit(1 << 20)) // 1 MiB cap on any request body
 	r.Use(s.middleware)
@@ -72,8 +76,12 @@ func (s *Server) Run(ctx context.Context) error {
 		r.Get("/divergence", s.handleDivergence)
 		r.Get("/divergence/history", s.handleDivergenceHistory)
 		r.Get("/blocks", s.handleBlocks)
+		r.Get("/blocks/{height}/rounds", s.handleBlockRounds)
 		r.Get("/chain", s.handleChain)
 		r.Get("/version", s.handleVersion)
+		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusNotFound, "API route not found")
+		})
 	})
 
 	r.Get("/ws", s.hub.serveWS)
@@ -82,11 +90,17 @@ func (s *Server) Run(ctx context.Context) error {
 	spaHandler := s.spa()
 	r.Handle("/*", spaHandler)
 
-	go s.hub.run(ctx)
+	return r
+}
 
+// Run serves HTTP and closes every websocket when the context ends.
+func (s *Server) Run(parent context.Context) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	go s.hub.run(ctx)
 	srv := &http.Server{
 		Addr:              s.opts.Listen,
-		Handler:           r,
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Slow-client mitigation. Long-lived WS connections go through Hijack
 		// which detaches from these timeouts, so the WS path is unaffected.
@@ -115,6 +129,11 @@ func (s *Server) Run(ctx context.Context) error {
 
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		// CORS for /api/* and /ws.
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/ws" {
 			if s.opts.CORSOrigin != "" {
@@ -233,17 +252,23 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	snap := s.opts.State.Snapshot()
 	out := snapshotJSON(snap, s.opts.Tracker, s.opts.Bus)
+	out["explorerURL"] = s.opts.ExplorerURL
+	out["displayName"] = s.opts.DisplayName
 	writeJSON(w, 200, out)
 }
 
 func (s *Server) handleChain(w http.ResponseWriter, _ *http.Request) {
 	snap := s.opts.State.Snapshot()
 	out := map[string]any{
-		"height":    snap.Height,
-		"round":     snap.Round,
-		"step":      snap.Step,
-		"blockTime": snap.BlockTime.Milliseconds(),
-		"activeRPC": snap.ActiveRPC,
+		"height":          snap.Height,
+		"round":           snap.Round,
+		"step":            snap.Step,
+		"blockTime":       snap.BlockTime.Milliseconds(),
+		"activeRPC":       snap.ActiveRPC,
+		"committedHeight": snap.LastCommittedHeight,
+		"health":          snap.Health,
+		"rpcComparison":   snap.RPCComparison,
+		"upgrade":         nil,
 	}
 	if snap.NodeStatus != nil {
 		out["network"] = snap.NodeStatus.Network
@@ -272,10 +297,12 @@ func (s *Server) handleValidators(w http.ResponseWriter, r *http.Request) {
 		filtered := rows[:0]
 		for _, v := range rows {
 			mon := ""
+			operator := ""
 			if v.ChainValidator != nil {
 				mon = strings.ToLower(v.ChainValidator.Moniker)
+				operator = strings.ToLower(v.ChainValidator.OperatorAddress)
 			}
-			if strings.Contains(mon, search) || strings.Contains(strings.ToLower(v.Validator.Address), search) {
+			if strings.Contains(mon, search) || strings.Contains(strings.ToLower(v.Validator.Address), search) || strings.Contains(operator, search) {
 				filtered = append(filtered, v)
 			}
 		}
@@ -325,9 +352,11 @@ func (s *Server) handleDivergenceHistory(w http.ResponseWriter, _ *http.Request)
 }
 
 func (s *Server) handleBlocks(w http.ResponseWriter, _ *http.Request) {
-	// Best-effort: not retained server-side beyond block-time average. The web
-	// frontend's blocks store fills incrementally via WS block.committed events.
-	writeJSON(w, 200, map[string]any{"items": []any{}})
+	samples := s.opts.State.Snapshot().Blocks
+	if samples == nil {
+		samples = []state.BlockSample{}
+	}
+	writeJSON(w, 200, map[string]any{"items": samples})
 }
 
 // ---- shared JSON shapes ----
@@ -367,13 +396,18 @@ func snapshotJSON(snap state.StateData, tracker *divergence.Tracker, _ *events.B
 		}
 	}
 	out := map[string]any{
-		"height":     snap.Height,
-		"round":      snap.Round,
-		"step":       snap.Step,
-		"startTime":  snap.StartTime,
-		"blockTime":  snap.BlockTime.Milliseconds(),
-		"activeRPC":  snap.ActiveRPC,
-		"validators": validators,
+		"height":          snap.Height,
+		"round":           snap.Round,
+		"step":            snap.Step,
+		"startTime":       snap.StartTime,
+		"blockTime":       snap.BlockTime.Milliseconds(),
+		"activeRPC":       snap.ActiveRPC,
+		"validators":      validators,
+		"committedHeight": snap.LastCommittedHeight,
+		"health":          snap.Health,
+		"blocks":          snap.Blocks,
+		"rpcComparison":   snap.RPCComparison,
+		"upgrade":         nil,
 	}
 	if snap.NodeStatus != nil {
 		out["chain"] = map[string]any{

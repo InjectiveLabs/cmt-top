@@ -10,15 +10,23 @@
 # All sections are optional; missing keys fall back to baked-in defaults.
 
 [chain]
-name           = "injective-1"
+name           = "" # optional display label; actual network comes from RPC
 bech32_prefix  = "inj"
 lcd            = "https://lcd.injective.network"
 explorer_url   = "https://explorer.injective.network/validator/{address}"
-mintscan_path  = "injective"
+
+# Cross-RPC AppHash comparison. Checks run at the status interval.
+# Compare headers at the same height; lag and unavailable nodes remain distinct
+# from a verified mismatch.
+# monitored_rpcs = [
+#   "https://injective-rpc.publicnode.com:443",
+#   "https://rpc.injective.posthuman.digital",
+# ]
+
 
 # Multi-RPC: list as many as you want; first entry wins until it errors and
 # the circuit breaker fails over to the next. The WS client uses the same
-# endpoint list; HTTP and WS share a single failover pool.
+# endpoint list; their active endpoints and health are reported separately.
 [[chain.rpc]]
 url     = "https://tm.injective.network"
 primary = true
@@ -26,25 +34,17 @@ primary = true
 [[chain.rpc]]
 url = "https://injective-rpc.publicnode.com:443"
 
-# Cross-RPC AppHash comparison. When set, every committed block is
-# re-queried at each endpoint and divergent app_hash values are surfaced
-# alongside the in-round divergence panel.
-# monitored_rpcs = [
-#   "https://injective-rpc.publicnode.com:443",
-#   "https://rpc.injective.posthuman.digital",
-# ]
 
 [refresh]
 validators   = "30s"   # validator-set + moniker enrichment
 upgrade_plan = "5m"    # x/upgrade plan (rare)
 status       = "5s"    # /status — height, sync, our-validator
 block_time   = "30s"   # rolling avg block time
-consensus    = "1s"    # HTTP fallback poll cadence; ignored while WS is live
+consensus    = "1s"    # HTTP fallback poll cadence; used when the vote stream is unavailable
 
 [divergence]
-threshold_pct    = 5.0       # any non-canonical group ≥ this VP% is a split
+threshold_pct    = 5.0       # any alternate non-nil group ≥ this VP% is a split
 history_size     = 32        # last N divergent rounds retained for the history view
-debounce         = "250ms"   # vote-stream debounce before emitting detection
 include_prevotes = false     # also detect prevote-stage splits (noisy)
 
 [ui]

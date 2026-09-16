@@ -1,3 +1,5 @@
+//go:build webui
+
 // Package web is the HTTP+WS frontend for cmt-top.
 package web
 

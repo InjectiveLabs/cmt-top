@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GitHubActionsCmtTopVersionTags",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::981432137740:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:InjectiveLabs@44571224/cmt-top@1373228692:ref:refs/tags/v*"
+        }
+      }
+    }
+  ]
+}

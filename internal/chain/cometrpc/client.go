@@ -12,6 +12,7 @@ import (
 
 	"github.com/cometbft/cometbft/rpc/client/http"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
+	jsonrpcclient "github.com/cometbft/cometbft/rpc/jsonrpc/client"
 	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/sony/gobreaker"
 )
@@ -39,6 +40,10 @@ type backend struct {
 // NewPool builds a Pool from a list of Endpoints. Primary endpoints are tried
 // first.
 func NewPool(eps []Endpoint) (*Pool, error) {
+	return newPool(eps, 8*time.Second)
+}
+
+func newPool(eps []Endpoint, timeout time.Duration) (*Pool, error) {
 	if len(eps) == 0 {
 		return nil, errors.New("no endpoints")
 	}
@@ -56,7 +61,14 @@ func NewPool(eps []Endpoint) (*Pool, error) {
 	}
 	p := &Pool{endpoints: make([]*backend, 0, len(sorted))}
 	for _, e := range sorted {
-		c, err := http.New(e.URL, "/websocket")
+		// A per-attempt deadline is necessary for failover: an unresponsive
+		// endpoint must return before the next backend can be tried.
+		transport, err := jsonrpcclient.DefaultHTTPClient(e.URL)
+		if err != nil {
+			return nil, fmt.Errorf("init %s: %w", e.URL, err)
+		}
+		transport.Timeout = timeout
+		c, err := http.NewWithClient(e.URL, "/websocket", transport)
 		if err != nil {
 			return nil, fmt.Errorf("init %s: %w", e.URL, err)
 		}
@@ -143,12 +155,44 @@ func (p *Pool) AllValidators(ctx context.Context, height *int64) ([]*cmttypes.Va
 	page := 1
 	all := []*cmttypes.Validator{}
 	var lastURL string
+	var pinnedHeight int64
+	if height != nil {
+		pinnedHeight = *height
+	}
+	seen := map[string]bool{}
+	expectedTotal := -1
 	for {
-		res, url, err := p.Validators(ctx, height, page, perPage)
+		requestHeight := height
+		if pinnedHeight > 0 {
+			requestHeight = &pinnedHeight
+		}
+		res, url, err := p.Validators(ctx, requestHeight, page, perPage)
 		if err != nil {
 			return nil, 0, "", err
 		}
 		lastURL = url
+		if pinnedHeight == 0 {
+			pinnedHeight = res.BlockHeight
+		}
+		if res.BlockHeight != pinnedHeight {
+			return nil, 0, "", fmt.Errorf("validator page height %d differs from requested %d", res.BlockHeight, pinnedHeight)
+		}
+		if expectedTotal < 0 {
+			expectedTotal = res.Total
+		}
+		if res.Total != expectedTotal || res.Total < 0 || len(all)+len(res.Validators) > expectedTotal {
+			return nil, 0, "", errors.New("inconsistent validator pagination total")
+		}
+		if len(res.Validators) == 0 && len(all) < expectedTotal {
+			return nil, 0, "", errors.New("incomplete validator pagination")
+		}
+		for _, v := range res.Validators {
+			key := string(v.Address)
+			if seen[key] {
+				return nil, 0, "", errors.New("duplicate validator across pages")
+			}
+			seen[key] = true
+		}
 		all = append(all, res.Validators...)
 		if len(all) >= res.Total || len(res.Validators) == 0 {
 			return all, int64(res.BlockHeight), lastURL, nil

@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Ri-go/cmt-top/internal/state"
+	"github.com/InjectiveLabs/cmt-top/internal/state"
 )
 
 // Querier resolves consensus addresses (hex) into ChainValidators.

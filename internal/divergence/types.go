@@ -40,13 +40,13 @@ type ValidatorPower struct {
 
 // Group is one BlockID-hash group.
 type Group struct {
-	BlockIDHash       string  // "" for nil-vote bucket
-	VotingPower       int64
-	VotingPowerPct    float64
-	ValidatorCount    int
-	SampleMonikers    []string // up to 5
-	Validators        []string // hex addrs (full set)
-	IsCanonical       bool     // resolved post-commit
+	BlockIDHash    string // "" for nil-vote bucket
+	VotingPower    int64
+	VotingPowerPct float64
+	ValidatorCount int
+	SampleMonikers []string // up to 5
+	Validators     []string // hex addrs (full set)
+	IsCanonical    bool     // resolved post-commit
 }
 
 // RoundReport is one (height, round, type) report.

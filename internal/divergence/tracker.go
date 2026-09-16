@@ -1,9 +1,10 @@
-// Package divergence implements the live AppHash divergence detector.
+// Package divergence tracks observed consensus BlockID vote splits.
 //
 // During each consensus round, validators are grouped by the BlockID hash they
 // signed. After commit, the canonical group is identified; non-canonical groups
-// with significant voting power are surfaced as divergence — a strong signal
-// that some validators computed a different AppHash for the previous block.
+// with significant voting power are surfaced as vote splits. These observations
+// do not establish AppHash disagreement or application nondeterminism; actual
+// AppHash comparison is a separate height-aligned RPC check.
 //
 // The tracker is a pure function over (VoteEvent stream, ValidatorSet snapshot,
 // canonical block id). No I/O, fully unit-testable.
@@ -43,13 +44,14 @@ type roundData struct {
 	canonicalHash    string
 	committed        bool // height has committed (we've seen NewBlock)
 	advanced         bool // round has advanced (we've seen round+1 or height+1)
+	detected         bool // one incident-created event per height/round/type
 }
 
 type groupData struct {
-	hash       string
+	hash        string
 	votingPower int64
-	validators []string
-	monikers   []string
+	validators  []string
+	monikers    []string
 }
 
 // Tracker is the divergence detector.
@@ -65,6 +67,10 @@ type Tracker struct {
 	// for height ≤ committedHeight are stragglers and must not create fresh
 	// (unresolvable) entries in t.rounds.
 	committedHeight int64
+
+	archive               map[int64]*archivedHeight
+	archiveEvictedThrough int64
+	archiveLatestHeight   int64
 }
 
 // New constructs a tracker.
@@ -73,8 +79,9 @@ func New(cfg Config) *Tracker {
 		cfg.HistorySize = 32
 	}
 	return &Tracker{
-		cfg:    cfg,
-		rounds: make(map[roundKey]*roundData),
+		cfg:     cfg,
+		rounds:  make(map[roundKey]*roundData),
+		archive: make(map[int64]*archivedHeight),
 	}
 }
 
@@ -95,6 +102,29 @@ func (t *Tracker) SetValidators(vs []ValidatorPower) {
 		if rd.totalVotingPower == 0 {
 			rd.validators = m
 			rd.totalVotingPower = total
+			rd.totalVotedPower = 0
+			for _, group := range rd.groups {
+				group.votingPower = 0
+				group.monikers = nil
+				for _, addr := range group.validators {
+					v := m[addr]
+					group.votingPower += v.Power
+					if v.Moniker != "" && len(group.monikers) < 5 {
+						group.monikers = append(group.monikers, v.Moniker)
+					}
+				}
+				rd.totalVotedPower += group.votingPower
+			}
+		}
+	}
+	for _, block := range t.archive {
+		for _, rd := range block.rounds {
+			if len(rd.roster) == 0 {
+				rd.roster = make(map[string]ValidatorPower, len(m))
+				for address, validator := range m {
+					rd.roster[address] = validator
+				}
+			}
 		}
 	}
 	t.mu.Unlock()
@@ -106,6 +136,14 @@ func (t *Tracker) SetValidators(vs []ValidatorPower) {
 func (t *Tracker) IngestVote(v VoteEvent) (RoundReport, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	t.observeVoteLocked(v)
+	// Archive admission also bounds the live detector and rejects malformed or
+	// evicted contexts. Unknown voters above the per-round cap cannot grow it.
+	block := t.archive[v.Height]
+	if block == nil || block.rounds[v.Round] == nil || block.rounds[v.Round].votes[v.ValidatorAddr][v.Type] == nil {
+		return RoundReport{}, false
+	}
 
 	// Reject stragglers from heights that have already committed. A late vote
 	// arriving after ResolveCommit would otherwise create a fresh unresolved
@@ -156,9 +194,10 @@ func (t *Tracker) IngestVote(v VoteEvent) (RoundReport, bool) {
 	if v.Type == Precommit || t.cfg.IncludePrevotes {
 		// Don't fire while still gathering — wait for round to settle (advanced
 		// or committed) OR the precommit set has crossed 2/3.
-		if rd.advanced || rd.committed || (v.Type == Precommit && rd.totalVotedPower*3 > rd.totalVotingPower*2) {
-			if rep.IsDivergent {
+		if !rd.advanced && (v.Type == Precommit && rd.totalVotingPower > 0 && rd.totalVotedPower > rd.totalVotingPower*2/3 || t.cfg.IncludePrevotes && rd.totalVotedPower == rd.totalVotingPower && rd.totalVotingPower > 0) {
+			if rep.IsDivergent && !rd.detected {
 				trigger = true
+				rd.detected = true
 			}
 		}
 	}
@@ -187,6 +226,8 @@ func (t *Tracker) ResolveCommit(height int64, canonicalBlockIDHash string) []Rou
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.archiveCommitLocked(height, canonicalBlockIDHash)
+
 	if height > t.committedHeight {
 		t.committedHeight = height
 	}
@@ -194,13 +235,12 @@ func (t *Tracker) ResolveCommit(height int64, canonicalBlockIDHash string) []Rou
 	resolved := []RoundReport{}
 	for k, rd := range t.rounds {
 		switch {
-		case k.Height == height:
+		case k.Height == height && !rd.resolved:
 			rd.committed = true
 			rd.resolved = true
 			rd.canonicalHash = canonicalBlockIDHash
 			rep := t.report(rd)
 			resolved = append(resolved, rep)
-			t.history = append(t.history, rep)
 		case k.Height < height && !rd.resolved:
 			// Catch up: this height committed without us seeing its NewBlock.
 			// Mark resolved so it leaves the live view; canonical hash unknown.
@@ -208,6 +248,13 @@ func (t *Tracker) ResolveCommit(height int64, canonicalBlockIDHash string) []Rou
 			rd.resolved = true
 		}
 	}
+	sort.Slice(resolved, func(i, j int) bool {
+		if resolved[i].Round != resolved[j].Round {
+			return resolved[i].Round < resolved[j].Round
+		}
+		return resolved[i].Type < resolved[j].Type
+	})
+	t.history = append(t.history, resolved...)
 	// Trim history.
 	if len(t.history) > t.cfg.HistorySize*4 {
 		t.history = t.history[len(t.history)-t.cfg.HistorySize*4:]
@@ -275,23 +322,27 @@ func (t *Tracker) report(rd *roundData) RoundReport {
 		})
 	}
 	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].VotingPower == groups[j].VotingPower {
+			return groups[i].BlockIDHash < groups[j].BlockIDHash
+		}
 		return groups[i].VotingPower > groups[j].VotingPower
 	})
 
 	// Divergence: any non-leader group above threshold (excluding the absent /
 	// nil group as the leader if everyone is nil — that's a different problem).
 	divergent := false
-	if len(groups) > 1 {
-		// Skip the leader (index 0); check each other group's pct.
-		for i := 1; i < len(groups); i++ {
-			if groups[i].BlockIDHash == "" {
-				// nil-vote group is informational, not a "divergence" signal
-				continue
-			}
-			if groups[i].VotingPowerPct >= t.cfg.ThresholdPct {
-				divergent = true
-				break
-			}
+	leaderFound := false
+	for _, group := range groups {
+		if group.BlockIDHash == "" {
+			continue
+		}
+		if !leaderFound {
+			leaderFound = true
+			continue
+		}
+		if group.VotingPowerPct >= t.cfg.ThresholdPct && group.VotingPower > 0 {
+			divergent = true
+			break
 		}
 	}
 

@@ -1,56 +1,82 @@
 <script lang="ts">
-  import { chain, errors, validatorsOrdered } from "../lib/stores";
-
-  $: total = $validatorsOrdered.length;
-  $: prevoted = $validatorsOrdered.filter(v => v.prevote.kind === "voted").length;
-  $: precommitted = $validatorsOrdered.filter(v => v.precommit.kind === "voted").length;
-  $: prevotePct = total ? (prevoted / total) * 100 : 0;
-  $: precommitPct = total ? (precommitted / total) * 100 : 0;
+  import { chain, validatorsOrdered } from "../lib/stores";
+  import { consensusSummary, formatHeight, shortHash, stepName } from "../lib/model";
+  $: summaries = [
+    { title: "Prevote", value: consensusSummary($validatorsOrdered, "prevote") },
+    { title: "Precommit", value: consensusSummary($validatorsOrdered, "precommit") },
+  ];
 </script>
 
-<div class="panel">
-  <h2>chain</h2>
-  <div class="kv">
-    <span class="k">network</span>
-    <span class="v">{$chain.chain?.network ?? "—"}</span>
-    <span class="k">comet</span>
-    <span class="v">{$chain.chain?.cometVersion ?? "—"}</span>
-    <span class="k">rpc</span>
-    <span class="v" style="font-size:11px; color: var(--muted);">{$chain.activeRPC ?? "—"}</span>
-    <span class="k">our val</span>
-    <span class="v" style="font-size:11px;">{$chain.chain?.ourValidator?.slice(0,12) ?? "—"}</span>
-    {#if $chain.upgrade}
-      <span class="k">upgrade</span>
-      <span class="v" style="color: var(--warn);">{$chain.upgrade.name} @ {$chain.upgrade.height}</span>
-    {/if}
+<section class="chain-summary" aria-label="Chain consensus summary">
+  <div class="metric">
+    <span>Consensus height</span><strong class="mono">{formatHeight($chain.height)}</strong>
   </div>
-</div>
-
-<div class="panel">
-  <h2>consensus</h2>
-  <div style="display:flex; flex-direction:column; gap:6px;">
-    <div>
-      <div style="display:flex; justify-content:space-between; font-size:11px;">
-        <span class="k">prevote</span>
-        <span class="v">{prevotePct.toFixed(1)}% ({prevoted}/{total})</span>
+  <div class="metric">
+    <span>Committed height</span><strong class="mono">{formatHeight($chain.committedHeight)}</strong
+    >
+  </div>
+  <div class="metric">
+    <span>Round / step</span><strong class="step"
+      ><span class="mono">{$chain.round}</span> <span class="muted">/</span>
+      {stepName($chain.step)}</strong
+    >
+  </div>
+  <div class="metric">
+    <span>Average block time</span><strong class="mono"
+      >{$chain.blockTime > 0 ? `${($chain.blockTime / 1000).toFixed(2)}s` : "—"}</strong
+    >
+  </div>
+</section>
+{#if $chain.upgrade}<div class="notice warning">
+    <span
+      >Upgrade <strong>{$chain.upgrade.name}</strong> at
+      <span class="mono">{formatHeight($chain.upgrade.height)}</span>
+      · {Math.max(0, $chain.upgrade.height - $chain.committedHeight).toLocaleString()} blocks remaining</span
+    >
+  </div>{/if}
+<section class="consensus-grid" aria-label="Consensus voting power">
+  {#each summaries as { title, value }}
+    <div class="panel consensus-panel">
+      <div class="panel-line">
+        <h2>{title}</h2>
+        <strong class="mono"
+          >{value.leading?.percent.toFixed(1) ?? "0.0"}%
+          <span class="muted small">leading BlockID</span></strong
+        >
       </div>
-      <div class="bar"><span style="width:{prevotePct}%; background:var(--accent);"></span></div>
-    </div>
-    <div>
-      <div style="display:flex; justify-content:space-between; font-size:11px;">
-        <span class="k">precommit</span>
-        <span class="v">{precommitPct.toFixed(1)}% ({precommitted}/{total})</span>
+      <div
+        class="power-meter"
+        role="img"
+        aria-label={`${title}: ${value.leading?.percent.toFixed(1) ?? 0}% for the leading BlockID, ${value.nilPct.toFixed(1)}% nil, ${value.absentPct.toFixed(1)}% not observed. Reference line at two thirds.`}
+      >
+        {#each value.groups as group, i}<span
+            class:leading={i === 0}
+            class:alternate={i > 0}
+            style={`width:${group.percent}%`}
+          ></span>{/each}
+        <span class="nil" style={`width:${value.nilPct}%`}></span>
       </div>
-      <div class="bar"><span style="width:{precommitPct}%; background:var(--good);"></span></div>
+      <div class="legend">
+        <span><i class="leading"></i>Leading {value.leading?.percent.toFixed(1) ?? "0.0"}%</span
+        >{#if value.groups.length > 1}<span
+            ><i class="alternate"></i>Other blocks {value.groups
+              .slice(1)
+              .reduce((n, g) => n + g.percent, 0)
+              .toFixed(1)}%</span
+          >{/if}<span><i class="nil"></i>Nil {value.nilPct.toFixed(1)}%</span><span
+          >Not observed {value.absentPct.toFixed(1)}%</span
+        >
+      </div>
+      <div class="consensus-context">
+        <span class="mono"
+          >{value.leading ? shortHash(value.leading.hash) : "No BlockID observed"}</span
+        ><span>{value.observedCount}/{value.totalCount} validators observed</span>
+      </div>
+      <div class="small muted">
+        {value.hasQuorum
+          ? "More than ⅔ observed for the leading BlockID"
+          : "│ ⅔ voting-power reference"}
+      </div>
     </div>
-  </div>
-</div>
-
-{#if Object.keys($errors).length > 0}
-  <div class="panel">
-    <h2>errors</h2>
-    {#each Object.entries($errors) as [k,v]}
-      <div style="font-size:11px; color: var(--bad);">{k}: {v}</div>
-    {/each}
-  </div>
-{/if}
+  {/each}
+</section>

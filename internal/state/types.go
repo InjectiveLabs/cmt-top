@@ -87,18 +87,18 @@ type Upgrade struct {
 
 // NodeStatus is the subset of /status we display.
 type NodeStatus struct {
-	Network        string
-	CometVersion   string
-	AppVersion     string
-	Moniker        string
-	OurValidator   string // hex consensus address of the node we're connected to
-	CatchingUp     bool
-	LatestHeight   int64
-	LatestBlockTs  time.Time
+	Network       string
+	CometVersion  string
+	AppVersion    string
+	Moniker       string
+	OurValidator  string // hex consensus address of the node we're connected to
+	CatchingUp    bool
+	LatestHeight  int64
+	LatestBlockTs time.Time
 }
 
-// State is the world the orchestrator owns. Read via Snapshot(); write via
-// Mutate(). Never read fields directly from a goroutine other than the orchestrator.
+// StateData is the monitoring state. Read through Snapshot and update only
+// inside Mutate; no pointers into live state should escape its lock.
 type StateData struct {
 	// Consensus
 	Height    int64
@@ -115,6 +115,10 @@ type StateData struct {
 	NodeStatus      *NodeStatus
 	Upgrade         *Upgrade
 	BlockTime       time.Duration
+	Blocks          []BlockSample
+	Health          Health
+	RPCComparison   RPCComparison
+	ValidatorHeight int64
 
 	// Errors per source
 	ConsensusError  error
@@ -131,6 +135,51 @@ type StateData struct {
 	ActiveRPC   string
 	WSConnected bool
 	LastUpdate  time.Time
+}
+
+// Health describes the upstream connection, independently of a browser's feed.
+// Timestamps record successful observations, never failed polling attempts.
+type Health struct {
+	Mode          string    `json:"mode"`
+	WSConnected   bool      `json:"wsConnected"`
+	WSEndpoint    string    `json:"wsEndpoint"`
+	HTTPEndpoint  string    `json:"httpEndpoint"`
+	LastEventAt   time.Time `json:"lastEventAt,omitzero"`
+	LastHTTPAt    time.Time `json:"lastHTTPAt,omitzero"`
+	LastSuccessAt time.Time `json:"lastSuccessAt,omitzero"`
+	LastError     string    `json:"lastError,omitempty"`
+	StaleAfterMs  int64     `json:"staleAfterMs"`
+}
+
+const BlockHistoryLimit = 120
+
+type BlockSample struct {
+	Height      int64     `json:"height"`
+	Time        time.Time `json:"time"`
+	BlockIDHash string    `json:"blockIDHash"`
+	AppHash     string    `json:"appHash"`
+	NumTxs      int       `json:"numTxs"`
+	BlockTimeMs int64     `json:"blockTimeMs"`
+}
+
+// RPCComparison compares the AppHash in block headers at exactly Height.
+// Lagging/incompatible/unreachable endpoints never count as a hash mismatch.
+type RPCComparison struct {
+	Status    string           `json:"status"`
+	Height    int64            `json:"height"`
+	ChainID   string           `json:"chainId"`
+	CheckedAt time.Time        `json:"checkedAt,omitzero"`
+	Endpoints []EndpointResult `json:"endpoints"`
+}
+
+type EndpointResult struct {
+	Endpoint     string `json:"endpoint"`
+	Status       string `json:"status"`
+	ChainID      string `json:"chainId"`
+	Height       int64  `json:"height"`
+	LatestHeight int64  `json:"latestHeight"`
+	AppHash      string `json:"appHash"`
+	Error        string `json:"error,omitempty"`
 }
 
 // RoundView is the latest round's votes used by both the validator table and
