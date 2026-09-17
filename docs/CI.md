@@ -23,7 +23,7 @@ public.ecr.aws/l9h3g6c6/cmt-top
 
 Choose a new version and push its tag after the code is ready. For example, a tag named `v1.2.3` publishes `:v1.2.3` and updates `:latest`. A prerelease such as `v1.2.3-rc.1` publishes only that version tag. These are examples, not the current release version.
 
-The migration preserves the historical `v0.1.0` and `v0.1.1` tags, including their original workflow files. Their release jobs were not rerun during import. ECR images begin with a new version tag on the migrated code; use the [local Docker build](USAGE.md#build) until that first release.
+The first image from the migrated code is `v0.1.2`, published by [the Blacksmith release workflow](https://github.com/InjectiveLabs/cmt-top/actions/runs/35203121648). The migration also preserves historical `v0.1.0` and `v0.1.1` source tags and their original workflows; their release jobs were not rerun during import.
 
 For a retry, use **Actions → Release Docker image → Run workflow** and select the version tag, or run `gh workflow run release.yml --ref <version-tag>`. A branch dispatch is rejected. Publishing a GitHub Release alone does not start another build; this avoids duplicate image pushes for the same tag.
 
@@ -31,11 +31,13 @@ The workflow requires the GitHub repository variable `AWS_ROLE_ARN` set to `arn:
 
 ## AWS publishing access
 
-The ECR repository and IAM role use the same AWS account and public registry as Stitch, with a separate role for cmt-top. The checked-in policies describe that role:
+The ECR repository and IAM role use the same AWS account and public registry as Stitch, with a separate role for cmt-top. They are managed by the [injective-iac AWS stack](https://github.com/InjectiveLabs/injective-iac/tree/main/aws). The checked-in policies record that role's permissions:
 
 - [Trust policy](../deploy/ci/aws-trust-policy.json): accepts GitHub OIDC tokens only for this repository's `v*` tag refs, with the `sts.amazonaws.com` audience. It uses GitHub's immutable owner and repository IDs returned by the repository's OIDC settings.
 - [Push policy](../deploy/ci/aws-push-policy.json): grants ECR Public authentication and image upload only to the `cmt-top` repository. It grants no repository deletion, IAM administration, or access to Stitch images.
 
-These are AWS configuration records; editing them does not automatically change IAM. If the repository is recreated or its OIDC subject settings change, update and apply the trust policy before the next release. Branch and pull-request jobs cannot assume this publishing role.
+The `sts:GetServiceBearerToken` statement uses `Resource: "*"` without a service-name condition, matching [AWS's documented ECR Public authentication grant](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonElasticContainerRegistryPublicPowerUser.html). Upload permissions remain scoped to the cmt-top repository.
+
+These are reference records; editing them does not automatically change IAM. Make and apply IAM changes through the Pulumi stack, then update these records. If the repository is recreated or its OIDC subject settings change, update and apply the trust policy before the next release. Branch and pull-request jobs cannot assume this publishing role.
 
 See [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc) and [AWS's ECR Public permissions reference](https://docs.aws.amazon.com/AmazonECR/latest/public/public-repository-policy-examples.html) for the subject format and required upload permissions.
