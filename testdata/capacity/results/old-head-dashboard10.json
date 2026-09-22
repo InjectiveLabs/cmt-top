@@ -1,0 +1,102 @@
+{
+  "target": "http://127.0.0.1:<ephemeral>",
+  "profile": "mainnet45",
+  "seed": 1,
+  "durationSeconds": 13.001626125,
+  "offered": 10,
+  "admitted": 10,
+  "baselineReady": 10,
+  "sessionErrors": 0,
+  "sequenceGaps": 0,
+  "messages": 10251,
+  "payloadBytes": 64634422,
+  "snapshots": 652,
+  "contexts": 0,
+  "reports": 0,
+  "notModified": 0,
+  "reportBytes": 0,
+  "httpStatuses": {
+    "bootstrap:200": 15,
+    "report:200": 1
+  },
+  "latencyMs": {
+    "bootstrapP50": 1.222,
+    "bootstrapP95": 3.52,
+    "bootstrapP99": 3.52
+  },
+  "upstreamBefore": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 0,
+    "committedHeight": 1000,
+    "events": 211,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 2,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": false,
+    "ready": true
+  },
+  "upstreamAfter": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1012,
+    "round": 0,
+    "committedHeight": 1011,
+    "events": 1223,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 4,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": true,
+    "ready": true
+  },
+  "dropMetrics": {
+    "cmt_top_bus_dropped_events_total{subscriber=\"metrics\"}": 0,
+    "cmt_top_bus_dropped_events_total{subscriber=\"wshub\"}": 0,
+    "cmt_top_ingest_dropped_events_total": 0,
+    "cmt_top_ws_dropped_events_total": 0
+  },
+  "oracleVerified": true,
+  "semanticDigest": "8a1344eb8a97eba1a521fcc940ed690ac45d68d4e45c8f149d9f74a347dd3ce5",
+  "pass": true,
+  "_measurement": {
+    "date": "2026-09-22",
+    "environment": "native macOS arm64; fixture, app and generator co-located; no CPU/memory quota",
+    "appRevision": "52532c264714ce5fd7c10ab2e44c335e4a4fdbcc",
+    "harnessGates": "before_strict_coverage",
+    "workload": {
+      "users": 10,
+      "rampSeconds": 3,
+      "holdSeconds": 10,
+      "investigatePercent": 0,
+      "rounds": 1,
+      "stalled": false,
+      "historyBlocks": 120,
+      "eventInterval": "1ms",
+      "blockInterval": "1s"
+    },
+    "scope": "local protocol test; no gateway, TLS or browser rendering; not production certification"
+  }
+}

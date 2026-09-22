@@ -1,0 +1,173 @@
+{
+  "target": "http://127.0.0.1:<ephemeral>",
+  "profile": "mainnet45",
+  "seed": 1,
+  "durationSeconds": 10.0022105,
+  "offered": 200,
+  "admitted": 168,
+  "baselineReady": 168,
+  "sessionErrors": 32,
+  "sequenceGaps": 0,
+  "messages": 69047,
+  "payloadBytes": 104903145,
+  "messageTypes": {
+    "block.committed": {
+      "messages": 756,
+      "bytes": 277872
+    },
+    "context.snapshot": {
+      "messages": 840,
+      "bytes": 617820
+    },
+    "divergence.detected": {
+      "messages": 672,
+      "bytes": 1501836
+    },
+    "divergence.resolved": {
+      "messages": 1512,
+      "bytes": 4573212
+    },
+    "pong": {
+      "messages": 84,
+      "bytes": 6119
+    },
+    "round.changed": {
+      "messages": 756,
+      "bytes": 168840
+    },
+    "state.snapshot": {
+      "messages": 1008,
+      "bytes": 78232376
+    },
+    "status.updated": {
+      "messages": 168,
+      "bytes": 39312
+    },
+    "vote.received": {
+      "messages": 63251,
+      "bytes": 19485758
+    }
+  },
+  "snapshots": 1008,
+  "contexts": 840,
+  "reports": 838,
+  "notModified": 0,
+  "reportBytes": 32625609,
+  "httpStatuses": {
+    "bootstrap:200": 175,
+    "report:200": 839
+  },
+  "latencyMs": {
+    "bootstrapP50": 17.261,
+    "bootstrapP95": 21.842,
+    "bootstrapP99": 22.285,
+    "reportP50": 0.335,
+    "reportP95": 2.53,
+    "reportP99": 10.709
+  },
+  "latencyObservations": {
+    "bootstrap": 175,
+    "report": 839
+  },
+  "resources": {
+    "processMetricsAvailable": true,
+    "samples": 11,
+    "cpuStartSeconds": 0.087158,
+    "cpuEndSeconds": 1.616473,
+    "averageCpuCores": 0.15289770196298108,
+    "peakRssBytes": 50757632,
+    "peakGoroutines": 529,
+    "peakReportCacheBytes": 1362373,
+    "peakQueueBytes": 494491,
+    "generatorPeakHeapBytes": 9154184
+  },
+  "firstErrors": [
+    "session 7 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 99 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 9 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 6 handshake: status=0 err=read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 36 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 97 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 149 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 123 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 179 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 79 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 16 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer",
+    "session 139 bootstrap: status=0 err=Get \"http://127.0.0.1:<ephemeral>/api/session\": read tcp 127.0.0.1:<ephemeral>->127.0.0.1:<ephemeral>: read: connection reset by peer"
+  ],
+  "upstreamBefore": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 0,
+    "committedHeight": 1000,
+    "events": 211,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 2,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": false,
+    "ready": true
+  },
+  "upstreamAfter": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1010,
+    "round": 0,
+    "committedHeight": 1009,
+    "events": 1020,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 4,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": true,
+    "ready": true
+  },
+  "dropMetrics": {
+    "cmt_top_bus_dropped_events_total{subscriber=\"metrics\"}": 0,
+    "cmt_top_bus_dropped_events_total{subscriber=\"wshub\"}": 0,
+    "cmt_top_ingest_dropped_events_total": 0,
+    "cmt_top_ws_dropped_events_total": 0
+  },
+  "oracleVerified": true,
+  "semanticDigest": "5908cafefd3e866de592d0790b84baea717e86f1dbc8ede528ac75f38b98f783",
+  "pass": false,
+  "_measurement": {
+    "date": "2026-09-22",
+    "environment": "native macOS arm64; fixture, app and generator co-located; no CPU/memory quota",
+    "appRevision": "working_tree",
+    "harnessGates": "before_retry_and_strict_coverage",
+    "workload": {
+      "users": 200,
+      "rampSeconds": 0,
+      "holdSeconds": 10,
+      "investigatePercent": 50,
+      "rounds": 1,
+      "stalled": false,
+      "historyBlocks": 120,
+      "eventInterval": "1ms",
+      "blockInterval": "1s"
+    },
+    "scope": "local protocol test; no gateway, TLS or browser rendering; not production certification"
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "target": "http://127.0.0.1:<ephemeral>",
+  "profile": "mainnet45",
+  "seed": 1,
+  "durationSeconds": 13.00246625,
+  "offered": 10,
+  "admitted": 10,
+  "baselineReady": 10,
+  "sessionErrors": 0,
+  "sequenceGaps": 0,
+  "messages": 9631,
+  "payloadBytes": 14972062,
+  "messageTypes": {
+    "block.committed": {
+      "messages": 102,
+      "bytes": 37496
+    },
+    "divergence.detected": {
+      "messages": 102,
+      "bytes": 227934
+    },
+    "divergence.resolved": {
+      "messages": 204,
+      "bytes": 617020
+    },
+    "round.changed": {
+      "messages": 102,
+      "bytes": 22781
+    },
+    "state.snapshot": {
+      "messages": 125,
+      "bytes": 11296532
+    },
+    "status.updated": {
+      "messages": 20,
+      "bytes": 4680
+    },
+    "vote.received": {
+      "messages": 8976,
+      "bytes": 2765619
+    }
+  },
+  "snapshots": 125,
+  "contexts": 0,
+  "reports": 0,
+  "notModified": 0,
+  "reportBytes": 0,
+  "httpStatuses": {
+    "bootstrap:200": 16,
+    "report:200": 1
+  },
+  "latencyMs": {
+    "bootstrapP50": 1.118,
+    "bootstrapP95": 2.05,
+    "bootstrapP99": 2.05
+  },
+  "latencyObservations": {
+    "bootstrap": 16,
+    "report": 1
+  },
+  "resources": {
+    "processMetricsAvailable": true,
+    "samples": 14,
+    "cpuStartSeconds": 0.105458,
+    "cpuEndSeconds": 0.610984,
+    "averageCpuCores": 0.038879239544267225,
+    "peakRssBytes": 34750464,
+    "peakGoroutines": 49,
+    "peakReportCacheBytes": 0,
+    "peakQueueBytes": 4901,
+    "generatorPeakHeapBytes": 2510960
+  },
+  "upstreamBefore": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 0,
+    "committedHeight": 1000,
+    "events": 211,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 2,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": false,
+    "ready": true
+  },
+  "upstreamAfter": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1012,
+    "round": 0,
+    "committedHeight": 1011,
+    "events": 1223,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 4,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": true,
+    "ready": true
+  },
+  "dropMetrics": {
+    "cmt_top_bus_dropped_events_total{subscriber=\"metrics\"}": 0,
+    "cmt_top_bus_dropped_events_total{subscriber=\"wshub\"}": 0,
+    "cmt_top_ingest_dropped_events_total": 0,
+    "cmt_top_ws_dropped_events_total": 0
+  },
+  "oracleVerified": true,
+  "semanticDigest": "8a1344eb8a97eba1a521fcc940ed690ac45d68d4e45c8f149d9f74a347dd3ce5",
+  "pass": true,
+  "_measurement": {
+    "date": "2026-09-22",
+    "environment": "native macOS arm64; fixture, app and generator co-located; no CPU/memory quota",
+    "appRevision": "working_tree",
+    "harnessGates": "before_strict_coverage",
+    "workload": {
+      "users": 10,
+      "rampSeconds": 3,
+      "holdSeconds": 10,
+      "investigatePercent": 0,
+      "rounds": 1,
+      "stalled": false,
+      "historyBlocks": 120,
+      "eventInterval": "1ms",
+      "blockInterval": "1s"
+    },
+    "scope": "local protocol test; no gateway, TLS or browser rendering; not production certification"
+  }
+}

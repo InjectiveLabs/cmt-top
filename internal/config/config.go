@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,10 +68,13 @@ type TUI struct {
 }
 
 type Web struct {
-	Listen     string `toml:"listen"`
-	Token      string `toml:"token"`
-	CORSOrigin string `toml:"cors_origin"`
-	Disabled   bool   `toml:"disabled"`
+	Listen         string   `toml:"listen"`
+	Token          string   `toml:"token"`
+	CORSOrigin     string   `toml:"cors_origin"`
+	Disabled       bool     `toml:"disabled"`
+	MaxClients     int      `toml:"max_clients"`
+	APIRateLimit   int      `toml:"api_rate_limit"`
+	TrustedProxies []string `toml:"trusted_proxies"`
 }
 
 type Obs struct {
@@ -124,7 +129,7 @@ func Defaults() Config {
 		UI: UI{
 			Mode: "tui",
 			TUI:  TUI{Timezone: "UTC"},
-			Web:  Web{Listen: "127.0.0.1:8080"},
+			Web:  Web{Listen: "127.0.0.1:8080", MaxClients: 256, APIRateLimit: 600},
 		},
 		Obs: Obs{
 			MetricsListen: "127.0.0.1:9091",
@@ -155,7 +160,9 @@ func Load(path string) (Config, error) {
 			return cfg, fmt.Errorf("stat %s: %w", path, err)
 		}
 	}
-	applyEnv(&cfg)
+	if err := applyEnv(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -170,7 +177,19 @@ func DefaultPath() string {
 	return ""
 }
 
-func applyEnv(cfg *Config) {
+func applyEnv(cfg *Config) error {
+	for name, target := range map[string]*int{"CMTOP_WEB_MAX_CLIENTS": &cfg.UI.Web.MaxClients, "CMTOP_WEB_API_RATE_LIMIT": &cfg.UI.Web.APIRateLimit} {
+		if v := os.Getenv(name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				return fmt.Errorf("%s must be a positive integer", name)
+			}
+			*target = n
+		}
+	}
+	if v := os.Getenv("CMTOP_WEB_TRUSTED_PROXIES"); v != "" {
+		cfg.UI.Web.TrustedProxies = splitCSV(v)
+	}
 	if v := os.Getenv("CMTOP_RPC"); v != "" {
 		cfg.Chain.RPCs = []RPC{{URL: v, Primary: true}}
 	}
@@ -198,6 +217,7 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("CMTOP_METRICS_LISTEN"); v != "" {
 		cfg.Obs.MetricsListen = v
 	}
+	return nil
 }
 
 func splitCSV(s string) []string {
@@ -226,6 +246,17 @@ func (c Config) PrimaryRPC() string {
 
 // Validate returns an error if the config is internally inconsistent.
 func (c Config) Validate() error {
+	if c.UI.Web.MaxClients <= 0 {
+		return errors.New("ui.web.max_clients must be positive")
+	}
+	if c.UI.Web.APIRateLimit <= 0 {
+		return errors.New("ui.web.api_rate_limit must be positive")
+	}
+	for _, cidr := range c.UI.Web.TrustedProxies {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return fmt.Errorf("ui.web.trusted_proxies: invalid CIDR %q", cidr)
+		}
+	}
 	if c.PrimaryRPC() == "" {
 		return errors.New("at least one [[chain.rpc]] entry is required")
 	}

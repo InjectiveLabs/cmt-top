@@ -71,6 +71,7 @@ type Tracker struct {
 	archive               map[int64]*archivedHeight
 	archiveEvictedThrough int64
 	archiveLatestHeight   int64
+	catalogueRevision     uint64
 }
 
 // New constructs a tracker.
@@ -120,6 +121,9 @@ func (t *Tracker) SetValidators(vs []ValidatorPower) {
 	for _, block := range t.archive {
 		for _, rd := range block.rounds {
 			if len(rd.roster) == 0 {
+				if len(m) > 0 {
+					block.revision++
+				}
 				rd.roster = make(map[string]ValidatorPower, len(m))
 				for address, validator := range m {
 					rd.roster[address] = validator
@@ -230,6 +234,7 @@ func (t *Tracker) ResolveCommit(height int64, canonicalBlockIDHash string) []Rou
 
 	if height > t.committedHeight {
 		t.committedHeight = height
+		t.catalogueRevision++
 	}
 
 	resolved := []RoundReport{}

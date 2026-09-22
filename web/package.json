@@ -8,10 +8,12 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "format": "prettier --write src vite.config.ts svelte.config.js tsconfig.json package.json",
-    "test": "vitest run",
+    "test": "vitest run src",
+    "test:e2e": "playwright test --config playwright.config.ts",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@sveltejs/vite-plugin-svelte": "^3.1.1",
     "prettier": "3.3.3",
     "prettier-plugin-svelte": "3.2.8",

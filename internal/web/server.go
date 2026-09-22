@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/InjectiveLabs/cmt-top/internal/metrics"
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/httprate"
+	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/InjectiveLabs/cmt-top/internal/divergence"
 	"github.com/InjectiveLabs/cmt-top/internal/events"
@@ -23,41 +24,57 @@ import (
 
 // Options configure the web server.
 type Options struct {
-	Listen      string
-	Token       string
-	CORSOrigin  string
-	DisplayName string
-	ExplorerURL string
-	State       *state.State
-	Bus         *events.Bus
-	Tracker     *divergence.Tracker
-	Logger      *slog.Logger
-	Ring        *obs.Ring
-	Version     string
-	Ready       func() bool
+	MaxClients     int
+	APIRateLimit   int
+	TrustedProxies []string
+	Capacity       *metrics.Capacity
+	Listen         string
+	Token          string
+	CORSOrigin     string
+	DisplayName    string
+	ExplorerURL    string
+	State          *state.State
+	Bus            *events.Bus
+	Tracker        *divergence.Tracker
+	Logger         *slog.Logger
+	Ring           *obs.Ring
+	Version        string
+	Ready          func() bool
 }
 
 // Server is the HTTP server.
 type Server struct {
-	opts Options
-	hub  *wsHub
+	opts   Options
+	hub    *wsHub
+	rounds *roundsCache
 }
 
 // New constructs a Server.
 func New(opts Options) *Server {
+	if opts.MaxClients <= 0 {
+		opts.MaxClients = 256
+	}
+	if opts.APIRateLimit <= 0 {
+		opts.APIRateLimit = 600
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
 	hub := newWSHub(opts.Bus, opts.State, opts.Tracker, opts.Logger.With("c", "wshub"), opts.CORSOrigin)
 	hub.explorerURL = opts.ExplorerURL
 	hub.displayName = opts.DisplayName
-	return &Server{opts: opts, hub: hub}
+	hub.maxClients = opts.MaxClients
+	hub.epoch = newServerEpoch()
+	hub.capabilities = []string{"context-v1", "rounds-compact-v1", "rounds-capture-v1"}
+	hub.observe = opts.Capacity.ObserveWS
+	return &Server{opts: opts, hub: hub, rounds: newRoundsCache(opts.Tracker, opts.Capacity.ObserveReport)}
 }
 
 // Handler builds the HTTP surface, also used by local integration tests.
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(bodySizeLimit(1 << 20)) // 1 MiB cap on any request body
+	r.Use(s.observeHTTP)
 	r.Use(s.middleware)
 
 	r.Get("/healthz", s.handleHealthz)
@@ -67,9 +84,8 @@ func (s *Server) Handler() http.Handler {
 	// for /api/*.
 
 	r.Route("/api", func(r chi.Router) {
-		// 60 req/s/IP across the API surface; bursts allowed via the limiter
-		// window. Returns 429 on excess.
-		r.Use(httprate.LimitByIP(60, time.Second))
+		r.Use(s.requestBudget())
+		r.Get("/session", s.handleSession)
 		r.Get("/state", s.handleState)
 		r.Get("/validators", s.handleValidators)
 		r.Get("/validators/{address}", s.handleValidator)
@@ -84,7 +100,7 @@ func (s *Server) Handler() http.Handler {
 		})
 	})
 
-	r.Get("/ws", s.hub.serveWS)
+	r.With(s.handshakeBudget()).Get("/ws", s.hub.serveWS)
 
 	// SPA at /
 	spaHandler := s.spa()
@@ -139,9 +155,10 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			if s.opts.CORSOrigin != "" {
 				w.Header().Set("Access-Control-Allow-Origin", s.opts.CORSOrigin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Expose-Headers", "ETag, Retry-After")
 				if r.Method == "OPTIONS" {
 					w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-None-Match")
 					w.WriteHeader(http.StatusNoContent)
 					return
 				}
@@ -449,4 +466,23 @@ func errorMap(s state.StateData) map[string]string {
 		out["upgrade"] = s.UpgradeError.Error()
 	}
 	return out
+}
+
+// observeHTTP uses chi's capability-preserving writer, including Hijacker for WS.
+func (s *Server) observeHTTP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		wrapped := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(wrapped, r)
+		route := chi.RouteContext(r.Context()).RoutePattern()
+		status := wrapped.Status()
+		if status == 0 {
+			if route == "/ws" {
+				status = http.StatusSwitchingProtocols
+			} else {
+				status = http.StatusOK
+			}
+		}
+		s.opts.Capacity.ObserveHTTP(route, status, time.Since(start))
+	})
 }

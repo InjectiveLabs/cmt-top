@@ -1,0 +1,160 @@
+{
+  "target": "http://127.0.0.1:<ephemeral>",
+  "profile": "mainnet45",
+  "seed": 1,
+  "durationSeconds": 13.002542881,
+  "offered": 150,
+  "admitted": 150,
+  "investigatorsIntended": 75,
+  "investigatorProfilesReady": 75,
+  "investigatorsWithReports": 75,
+  "admissionTransientErrors": 0,
+  "admissionRetries": 0,
+  "baselineReady": 150,
+  "sessionErrors": 0,
+  "sequenceGaps": 0,
+  "messages": 63299,
+  "payloadBytes": 107247963,
+  "messageTypes": {
+    "block.committed": {
+      "messages": 709,
+      "bytes": 262759
+    },
+    "context.snapshot": {
+      "messages": 905,
+      "bytes": 668282
+    },
+    "divergence.detected": {
+      "messages": 642,
+      "bytes": 1436721
+    },
+    "divergence.resolved": {
+      "messages": 1418,
+      "bytes": 4293253
+    },
+    "pong": {
+      "messages": 75,
+      "bytes": 5696
+    },
+    "round.changed": {
+      "messages": 709,
+      "bytes": 162931
+    },
+    "state.snapshot": {
+      "messages": 940,
+      "bytes": 82417778
+    },
+    "status.updated": {
+      "messages": 150,
+      "bytes": 35370
+    },
+    "vote.received": {
+      "messages": 57751,
+      "bytes": 17965173
+    }
+  },
+  "snapshots": 940,
+  "contexts": 905,
+  "reports": 915,
+  "notModified": 0,
+  "reportBytes": 35621386,
+  "httpStatuses": {
+    "bootstrap:200": 157,
+    "report:200": 916
+  },
+  "latencyMs": {
+    "baselineReadyP50": 2.832,
+    "baselineReadyP95": 15.072,
+    "baselineReadyP99": 31.544,
+    "bootstrapP50": 0.502,
+    "bootstrapP95": 1.224,
+    "bootstrapP99": 2.803,
+    "reportP50": 0.548,
+    "reportP95": 3.619,
+    "reportP99": 17.979
+  },
+  "latencyObservations": {
+    "baselineReady": 150,
+    "bootstrap": 157,
+    "report": 916
+  },
+  "resources": {
+    "processMetricsAvailable": true,
+    "samples": 14,
+    "cpuStartSeconds": 0.05,
+    "cpuEndSeconds": 1.44,
+    "averageCpuCores": 0.10690216619328678,
+    "peakRssBytes": 40054784,
+    "peakGoroutines": 333,
+    "peakReportCacheBytes": 1768284,
+    "peakQueueBytes": 714201,
+    "generatorPeakHeapBytes": 3839360
+  },
+  "upstreamBefore": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 0,
+    "committedHeight": 1000,
+    "events": 211,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 2,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": false,
+    "ready": true
+  },
+  "upstreamAfter": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1012,
+    "round": 0,
+    "committedHeight": 1011,
+    "events": 1214,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 4,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": true,
+    "ready": true
+  },
+  "dropMetricsVerified": true,
+  "dropMetrics": {
+    "cmt_top_bus_dropped_events_total{subscriber=\"metrics\"}": 0,
+    "cmt_top_bus_dropped_events_total{subscriber=\"wshub\"}": 0,
+    "cmt_top_ingest_dropped_events_total": 0,
+    "cmt_top_ws_dropped_events_total": 0
+  },
+  "oracleVerified": true,
+  "semanticDigest": "26d47a658a4405d7e1ea65eccbde6164f9a5928d46b78a2965f2a9ab0c501645",
+  "pass": true,
+  "verification": {
+    "date": "2026-09-22",
+    "environment": "Linux arm64 Docker Desktop; app, source and generator share 2 CPUs / 1 GiB; --network none",
+    "command": "make capacity-isolated",
+    "rampSeconds": 3,
+    "holdSeconds": 10,
+    "investigatePercent": 50,
+    "gates": "Final strict per-investigator report, profile barrier, conditional provenance and final drop-metric verification."
+  }
+}

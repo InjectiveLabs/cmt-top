@@ -1,0 +1,163 @@
+{
+  "target": "http://127.0.0.1:<ephemeral>",
+  "profile": "mainnet45",
+  "seed": 1,
+  "durationSeconds": 303.009824347,
+  "offered": 200,
+  "admitted": 200,
+  "baselineReady": 200,
+  "sessionErrors": 0,
+  "sequenceGaps": 0,
+  "messages": 2416955,
+  "payloadBytes": 5441686357,
+  "messageTypes": {
+    "block.committed": {
+      "messages": 25245,
+      "bytes": 9402622
+    },
+    "block_time.updated": {
+      "messages": 1000,
+      "bytes": 107200
+    },
+    "context.snapshot": {
+      "messages": 30206,
+      "bytes": 22327012
+    },
+    "divergence.detected": {
+      "messages": 25253,
+      "bytes": 56552103
+    },
+    "divergence.resolved": {
+      "messages": 50490,
+      "bytes": 152953813
+    },
+    "pong": {
+      "messages": 100,
+      "bytes": 7590
+    },
+    "round.changed": {
+      "messages": 25245,
+      "bytes": 5839560
+    },
+    "state.snapshot": {
+      "messages": 30253,
+      "bytes": 4498072919
+    },
+    "status.updated": {
+      "messages": 6000,
+      "bytes": 1430610
+    },
+    "upgrade.changed": {
+      "messages": 100,
+      "bytes": 13800
+    },
+    "validators.changed": {
+      "messages": 1000,
+      "bytes": 104500
+    },
+    "vote.received": {
+      "messages": 2222063,
+      "bytes": 694874628
+    }
+  },
+  "snapshots": 30253,
+  "contexts": 30206,
+  "reports": 28753,
+  "notModified": 1,
+  "reportBytes": 1131947129,
+  "httpStatuses": {
+    "bootstrap:200": 207,
+    "report:200": 28753,
+    "report:304": 1
+  },
+  "latencyMs": {
+    "bootstrapP50": 0.327,
+    "bootstrapP95": 1.609,
+    "bootstrapP99": 3.041,
+    "reportP50": 0.726,
+    "reportP95": 8.711,
+    "reportP99": 47.571
+  },
+  "latencyObservations": {
+    "bootstrap": 207,
+    "report": 28754
+  },
+  "resources": {
+    "processMetricsAvailable": true,
+    "samples": 304,
+    "cpuStartSeconds": 0.03,
+    "cpuEndSeconds": 43.09,
+    "averageCpuCores": 0.1421076035828088,
+    "peakRssBytes": 56094720,
+    "peakGoroutines": 440,
+    "peakReportCacheBytes": 4957360,
+    "peakQueueBytes": 1299064,
+    "generatorPeakHeapBytes": 6569424
+  },
+  "upstreamBefore": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 0,
+    "committedHeight": 1000,
+    "events": 211,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 2,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": false,
+    "ready": true
+  },
+  "upstreamAfter": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1255,
+    "round": 0,
+    "committedHeight": 1254,
+    "events": 23579,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 2,
+      "lcd.validators": 11,
+      "rpc.block": 23,
+      "rpc.consensus_state": 1,
+      "rpc.status": 72,
+      "rpc.validators": 11,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": true,
+    "ready": true
+  },
+  "dropMetrics": {
+    "cmt_top_bus_dropped_events_total{subscriber=\"metrics\"}": 0,
+    "cmt_top_bus_dropped_events_total{subscriber=\"wshub\"}": 0,
+    "cmt_top_ingest_dropped_events_total": 0,
+    "cmt_top_ws_dropped_events_total": 0
+  },
+  "oracleVerified": true,
+  "semanticDigest": "a889cfeadb09270e6ea919231c0686e3603c3ec7c9a662329e9484448b1a14d7",
+  "pass": true,
+  "verification": {
+    "date": "2026-09-22",
+    "environment": "Linux arm64 in Docker Desktop; app, source and generator share 2 CPUs / 1 GiB; --network none",
+    "image": "sha256:7bdbcb51df3da85dbd1eb7438e517acfce460a000c36defed76d4a74d58ea8e4",
+    "rampSeconds": 3,
+    "holdSeconds": 300,
+    "investigatePercent": 50,
+    "limitation": "Predates final strict per-investigator coverage and final-metric-presence gates. Report count, final drop counter coverage and oracle were manually checked. No Gateway, TLS or browser rendering; sampled process peaks, average CPU, not CPU p95. Continuous synthetic splits are intentionally bandwidth-heavy."
+  }
+}

@@ -1,0 +1,148 @@
+[
+  {
+    "users": 1,
+    "measuredSeconds": 23.63832591600294,
+    "bytes": {
+      "app_to_browsers": 1080824,
+      "app_to_source": 836,
+      "browsers_to_app": 5090,
+      "source_to_app": 691752
+    },
+    "mbps": {
+      "app_to_browsers": 0.36578698638495094,
+      "app_to_source": 0.0002829303574104748,
+      "browsers_to_app": 0.001722626219161862,
+      "source_to_app": 0.23411201028637646
+    },
+    "sourceBefore": {
+      "identity": "cmt-top-local-replay-v1",
+      "profile": "mainnet45",
+      "seed": 1,
+      "validators": 45,
+      "height": 1001,
+      "round": 0,
+      "committedHeight": 1000,
+      "events": 211,
+      "connections": 1,
+      "activeConnections": 1,
+      "requests": {
+        "lcd.validators": 1,
+        "rpc.block": 3,
+        "rpc.consensus_state": 30,
+        "rpc.status": 7,
+        "rpc.validators": 1,
+        "ws.subscribe": 4
+      },
+      "unexpectedRequests": 0,
+      "paused": false,
+      "ready": true
+    },
+    "sourceAfter": {
+      "identity": "cmt-top-local-replay-v1",
+      "profile": "mainnet45",
+      "seed": 1,
+      "validators": 45,
+      "height": 1022,
+      "round": 0,
+      "committedHeight": 1021,
+      "events": 2054,
+      "connections": 1,
+      "activeConnections": 1,
+      "requests": {
+        "lcd.validators": 1,
+        "rpc.block": 3,
+        "rpc.consensus_state": 30,
+        "rpc.status": 11,
+        "rpc.validators": 1,
+        "ws.subscribe": 4
+      },
+      "unexpectedRequests": 0,
+      "paused": false,
+      "ready": true
+    },
+    "scope": "Synthetic 45-validator, one round, empty transaction blocks. HTTP bytes plus WebSocket frames counted on proxy TCP socket reads/writes, excluding TCP/IP, ACKs, TLS. Includes load setup and final oracle capture; fixture-control and metrics traffic excluded. No real chain access.",
+    "date": "2026-09-22",
+    "investigatorSessions": 1,
+    "measurementCaveats": [
+      "Interval starts after fixture readiness and includes load setup plus final oracle capture; no initial application/collector warmup.",
+      "Twenty-second hold plus three-second ramp; no 30-second validator/block-time refresh or five-minute upgrade refresh fell within either measurement window.",
+      "One-user case is an investigator; 150-user case is 75 dashboard and 75 investigators. Browser rates should not be compared as a per-user scaling factor.",
+      "Reverse proxies count bytes on their backend TCP socket read/write calls, including HTTP headers and WebSocket frames but excluding TCP/IP, acknowledgements, retransmissions and TLS.",
+      "Fixture control and metrics requests bypass the counters. No real node or production application was contacted."
+    ]
+  },
+  {
+    "users": 150,
+    "measuredSeconds": 23.286355874999572,
+    "bytes": {
+      "app_to_browsers": 310344812,
+      "app_to_source": 833,
+      "browsers_to_app": 360788,
+      "source_to_app": 691749
+    },
+    "mbps": {
+      "app_to_browsers": 106.61859285013807,
+      "app_to_source": 0.00028617616409249016,
+      "browsers_to_app": 0.12394829038487556,
+      "source_to_app": 0.23764955022186793
+    },
+    "sourceBefore": {
+      "identity": "cmt-top-local-replay-v1",
+      "profile": "mainnet45",
+      "seed": 1,
+      "validators": 45,
+      "height": 1001,
+      "round": 0,
+      "committedHeight": 1000,
+      "events": 211,
+      "connections": 1,
+      "activeConnections": 1,
+      "requests": {
+        "lcd.upgrade": 1,
+        "lcd.validators": 1,
+        "rpc.block": 3,
+        "rpc.consensus_state": 1,
+        "rpc.status": 2,
+        "rpc.validators": 1,
+        "ws.subscribe": 4
+      },
+      "unexpectedRequests": 0,
+      "paused": false,
+      "ready": true
+    },
+    "sourceAfter": {
+      "identity": "cmt-top-local-replay-v1",
+      "profile": "mainnet45",
+      "seed": 1,
+      "validators": 45,
+      "height": 1022,
+      "round": 0,
+      "committedHeight": 1021,
+      "events": 2054,
+      "connections": 1,
+      "activeConnections": 1,
+      "requests": {
+        "lcd.upgrade": 1,
+        "lcd.validators": 1,
+        "rpc.block": 3,
+        "rpc.consensus_state": 1,
+        "rpc.status": 6,
+        "rpc.validators": 1,
+        "ws.subscribe": 4
+      },
+      "unexpectedRequests": 0,
+      "paused": false,
+      "ready": true
+    },
+    "scope": "Synthetic 45-validator, one round, empty transaction blocks. HTTP bytes plus WebSocket frames counted on proxy TCP socket reads/writes, excluding TCP/IP, ACKs, TLS. Includes load setup and final oracle capture; fixture-control and metrics traffic excluded. No real chain access.",
+    "date": "2026-09-22",
+    "investigatorSessions": 75,
+    "measurementCaveats": [
+      "Interval starts after fixture readiness and includes load setup plus final oracle capture; no initial application/collector warmup.",
+      "Twenty-second hold plus three-second ramp; no 30-second validator/block-time refresh or five-minute upgrade refresh fell within either measurement window.",
+      "One-user case is an investigator; 150-user case is 75 dashboard and 75 investigators. Browser rates should not be compared as a per-user scaling factor.",
+      "Reverse proxies count bytes on their backend TCP socket read/write calls, including HTTP headers and WebSocket frames but excluding TCP/IP, acknowledgements, retransmissions and TLS.",
+      "Fixture control and metrics requests bypass the counters. No real node or production application was contacted."
+    ]
+  }
+]

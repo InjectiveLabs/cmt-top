@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	tmjson "github.com/cometbft/cometbft/rpc/jsonrpc/client"
+	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	"github.com/gorilla/websocket"
 )
 
 // State is the transport state.
@@ -78,6 +80,9 @@ func New(opts Options) (*Client, error) {
 	if opts.Handler == nil {
 		return nil, errors.New("nil handler")
 	}
+	if opts.IdleTimeout < 0 || opts.MaxBackoff < 0 {
+		return nil, errors.New("timeouts must not be negative")
+	}
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = 30 * time.Second
 	}
@@ -122,7 +127,7 @@ func (c *Client) Run(ctx context.Context) {
 		if backoff > c.maxBackoff {
 			backoff = c.maxBackoff
 		}
-		jitter := time.Duration(rand.Int63n(int64(backoff) / 5))
+		jitter := time.Duration(rand.Int63n(max(1, int64(backoff)/5)))
 		wait := backoff + jitter
 		select {
 		case <-ctx.Done():
@@ -160,69 +165,72 @@ func (c *Client) setState(s State, ep string, err error) {
 func (c *Client) connectAndPump(ctx context.Context, endpoint string) error {
 	c.setState(StateConnecting, endpoint, nil)
 
-	wsURL, wsPath := splitWSURL(endpoint)
-	wsc, err := tmjson.NewWS(wsURL, wsPath)
+	wsURL, err := subscriptionURL(endpoint)
 	if err != nil {
-		return fmt.Errorf("ws new: %w", err)
+		return err
 	}
-
-	if err := wsc.Start(); err != nil {
-		return fmt.Errorf("ws start: %w", err)
+	// The wrapper owns reconnect and resubscription. The CometBFT WS client
+	// reconnects internally without restoring our subscriptions and can race
+	// Stop against starting replacement reader/writer goroutines.
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 10 * time.Second
+	conn, resp, err := dialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return fmt.Errorf("ws dial: %w", err)
 	}
-	defer func() {
-		_ = wsc.Stop()
-	}()
+	defer conn.Close()
+	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopClose()
+	conn.SetReadLimit(64 << 20)
 
 	c.setState(StateSubscribing, endpoint, nil)
-	subCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	for _, q := range c.queries {
-		if err := wsc.Subscribe(subCtx, q); err != nil {
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	for i, q := range c.queries {
+		request := struct {
+			JSONRPC string            `json:"jsonrpc"`
+			ID      int               `json:"id"`
+			Method  string            `json:"method"`
+			Params  map[string]string `json:"params"`
+		}{"2.0", i, "subscribe", map[string]string{"query": q}}
+		if err := conn.WriteJSON(request); err != nil {
 			return fmt.Errorf("subscribe %q: %w", q, err)
 		}
 	}
 
-	idle := time.NewTimer(c.idleTimeout)
-	defer idle.Stop()
-
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-idle.C:
-			return errors.New("idle timeout")
-		case resp, ok := <-wsc.ResponsesCh:
-			if !ok {
-				return errors.New("ws responses closed")
+		_ = conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+		var resp rpctypes.RPCResponse
+		if err := conn.ReadJSON(&resp); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			if !idle.Stop() {
-				select {
-				case <-idle.C:
-				default:
-				}
-			}
-			idle.Reset(c.idleTimeout)
-
-			if resp.Error != nil {
-				return fmt.Errorf("ws subscription: %s", resp.Error)
-			}
-			if len(resp.Result) == 0 {
-				continue // ack to subscribe
-			}
-			ev, err := decodeEvent(resp.Result)
-			if err != nil {
-				c.logger.Debug("ws decode", "err", err)
-				continue
-			}
-			if ev.Data == nil {
-				continue
-			}
-			if c.State() != StateLive {
-				c.setState(StateLive, endpoint, nil)
-				c.logger.Info("ws live", "endpoint", endpoint, "subs", len(c.queries))
-			}
-			c.handler(ev)
+			return fmt.Errorf("ws read: %w", err)
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if resp.Error != nil {
+			return fmt.Errorf("ws subscription: %s", resp.Error)
+		}
+		if len(resp.Result) == 0 {
+			continue // ack to subscribe
+		}
+		ev, err := decodeEvent(resp.Result)
+		if err != nil {
+			c.logger.Debug("ws decode", "err", err)
+			continue
+		}
+		if ev.Data == nil {
+			continue
+		}
+		if c.State() != StateLive {
+			c.setState(StateLive, endpoint, nil)
+			c.logger.Info("ws live", "endpoint", endpoint, "subs", len(c.queries))
+		}
+		c.handler(ev)
 	}
 }
 
@@ -271,15 +279,23 @@ func unmarshalEventData(t string, v json.RawMessage) (EventData, error) {
 	}
 }
 
-// splitWSURL splits e.g. "https://host:443" into ("https://host:443", "/websocket").
-// If a path is present, that is used; otherwise /websocket is the default.
-func splitWSURL(endpoint string) (string, string) {
-	idx := strings.LastIndex(endpoint, "/")
-	if idx > len(endpoint)-2 {
-		return endpoint[:idx], "/websocket"
+func subscriptionURL(endpoint string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return "", errors.New("invalid websocket endpoint")
 	}
-	// Pass full endpoint as remote, /websocket as path.
-	return endpoint, "/websocket"
+	switch u.Scheme {
+	case "http", "ws":
+		u.Scheme = "ws"
+	case "https", "wss":
+		u.Scheme = "wss"
+	default:
+		return "", errors.New("websocket endpoint must use http, https, ws or wss")
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/websocket"
+	u.RawPath = ""
+	u.Fragment = ""
+	return u.String(), nil
 }
 
 func min(a, b int) int {

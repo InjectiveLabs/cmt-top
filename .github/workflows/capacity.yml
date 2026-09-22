@@ -1,0 +1,65 @@
+name: Capacity soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      users:
+        description: Concurrent protocol sessions
+        type: choice
+        options: ['100', '150', '200']
+        default: '150'
+      hold:
+        description: Hold duration after ramp
+        type: choice
+        options: ['5m', '30m', '1h']
+        default: '30m'
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [mainnet45, testnet5, stalled128]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1.11.0
+      - name: Build isolated protocol fixture
+        run: make capacity-image
+      - name: Run synthetic workload
+        env:
+          LOAD_USERS: ${{ inputs.users }}
+          LOAD_HOLD: ${{ inputs.hold }}
+          LOAD_PROFILE: ${{ matrix.profile }}
+        run: |
+          mkdir -p capacity-results
+          chmod 777 capacity-results
+          rounds=1
+          stalled=0
+          investigators=50
+          if [[ "$LOAD_PROFILE" == stalled128 ]]; then
+            LOAD_PROFILE=mainnet45
+            rounds=128
+            stalled=1
+            investigators=100
+          fi
+          docker run --rm --network none --cpus=2 --memory=1g \
+            -v "$PWD/capacity-results:/results" \
+            -e CAPACITY_OUTPUT_DIR=/results \
+            -e CAPACITY_USERS="$LOAD_USERS" -e CAPACITY_DURATION="$LOAD_HOLD" \
+            -e CAPACITY_PROFILE="$LOAD_PROFILE" -e CAPACITY_ROUNDS="$rounds" \
+            -e CAPACITY_INVESTIGATE_PERCENT="$investigators" \
+            -e CAPACITY_STALLED="$stalled" cmt-top-capacity:local
+      - name: Save results and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: capacity-${{ matrix.profile }}-${{ inputs.users }}
+          path: capacity-results/
+          if-no-files-found: warn

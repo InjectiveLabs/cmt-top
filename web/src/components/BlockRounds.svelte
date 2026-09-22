@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { fetchBlockRounds } from "../lib/api";
+  import { APIError } from "../lib/api";
+  import { createInvestigationClient, type InvestigationView } from "../lib/investigation";
+  import { legacySession, type SessionInfo } from "../lib/session";
   import { createPoller } from "../lib/poll";
   import { dashboard, pausedAt } from "../lib/stores";
   import { elapsed, formatHeight, healthMode } from "../lib/model";
@@ -8,10 +10,8 @@
   import {
     filterRoundValidators,
     hashLabel,
-    normalizeInvestigation,
     percentOf,
     powerOf,
-    selectRound,
     summarizePhase,
     voteIdentity,
     type BlockInvestigation,
@@ -31,11 +31,21 @@
   export let height: number;
   export let token = "";
   export let now: number;
+  export let hidden = false;
+  export let session: SessionInfo = legacySession();
   export let onNavigate: (path: string) => void;
   export let onAuthFailure: () => void;
   let report: BlockInvestigation | null = null;
-  let rawReport: unknown;
-  let poller: ReturnType<typeof createPoller<unknown>> | undefined;
+  let viewData: InvestigationView | null = null;
+  let stagedResume: InvestigationView | null = null;
+  let captureController: AbortController | undefined;
+  let captureBusy = false,
+    capturingPause = false,
+    disposed = false;
+  const client = createInvestigationClient(height, token || undefined, () => session);
+  let lastSelectionKey = "",
+    lastSessionKey = "";
+  let poller: ReturnType<typeof createPoller<InvestigationView>> | undefined;
   let loading = false,
     error = "",
     loadedAt = 0;
@@ -47,27 +57,52 @@
   let search = "",
     filter: ComparisonFilter = "all",
     selectedHash: string | null = null;
-  $: selectedRound = selectRound(report?.rounds ?? [], selectedRound, followLatest);
-  $: round = report?.rounds.find((r) => r.round === selectedRound);
-  $: if (
-    referenceRound &&
-    (referenceRound === String(selectedRound) ||
-      !report?.rounds.some((r) => String(r.round) === referenceRound))
-  )
-    referenceRound = "";
+  $: if (followLatest && report)
+    selectedRound = viewData?.compact
+      ? viewData.selectedRound
+      : (report.rounds[report.rounds.length - 1]?.round ?? null);
+  $: round = report?.rounds.find((r) => r.round === selectedRound && r.detailsLoaded !== false);
+  $: if (referenceRound && referenceRound === String(selectedRound)) referenceRound = "";
   $: if (filter === "changed" && !reference) filter = "all";
   $: duration = observedDuration(report, $pausedAt || now);
-  $: reference = report?.rounds.find((r) => String(r.round) === referenceRound);
+  $: reference = report?.rounds.find(
+    (r) => String(r.round) === referenceRound && r.detailsLoaded !== false,
+  );
   $: referenceValidators = new Map(reference?.validators.map((v) => [v.address, v]) ?? []);
   $: visibleValidators = round
     ? filterRoundValidators(round, reference, filter, search, selectedHash)
     : [];
   $: upstream = healthMode($dashboard.health, now);
-  $: staleResponse = loadedAt > 0 && !$pausedAt && now - loadedAt > 5000;
+  $: pollInterval =
+    !report || report.status === "live" || report.status === "not_observed"
+      ? session.cadence.activePollMs
+      : session.cadence.settledPollMs;
+  $: staleResponse =
+    loadedAt > 0 && !$pausedAt && !hidden && now - loadedAt > Math.max(5000, pollInterval * 2.5);
+  $: context =
+    viewData?.compact && !$pausedAt
+      ? { activeHeight: $dashboard.height, upgrade: $dashboard.upgrade }
+      : report?.context;
   $: retainedHeights = report?.retention.retainedHeights ?? [];
   $: priorHeight = retainedHeights.filter((h) => h < height).sort((a, b) => b - a)[0];
   $: nextHeight = retainedHeights.filter((h) => h > height).sort((a, b) => a - b)[0];
-  $: if (poller) poller.setPaused(Boolean($pausedAt));
+  $: if (poller) poller.setPaused(Boolean($pausedAt) || capturingPause, false);
+  $: if (poller) poller.setHidden(hidden);
+  $: if (hidden) captureController?.abort();
+  $: selectionKey = `${followLatest ? "latest" : selectedRound}/${referenceRound}`;
+  $: if (poller && selectionKey !== lastSelectionKey) {
+    lastSelectionKey = selectionKey;
+    if (!$pausedAt && !capturingPause) {
+      poller.invalidate();
+    }
+  }
+  $: sessionKey = `${session.serverEpoch}/${session.capabilities.join(",")}`;
+  $: if (poller && sessionKey !== lastSessionKey) {
+    lastSessionKey = sessionKey;
+    if (!$pausedAt && !capturingPause) {
+      poller.invalidate();
+    }
+  }
 
   function navigate(event: MouseEvent, path: string) {
     if (!shouldNavigate(event)) return;
@@ -112,37 +147,100 @@
         ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
         : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
   }
-  function exportEvidence() {
-    if (!report) return;
-    const exportData = {
-      exportedAt: new Date().toISOString(),
-      selectedRound,
-      referenceRound: reference?.round ?? null,
-      observationNotice:
-        "Observed RPC vote events only. In-memory bounded retention; no historical backfill. Hash cohorts do not establish binary versions or nondeterminism. Conflicting observations need validation against signed votes.",
-      investigation: rawReport,
+  function applyReport(value: InvestigationView) {
+    viewData = value;
+    report = value.report;
+    loadedAt = Date.now();
+    error = "";
+  }
+  function selection() {
+    return {
+      round: followLatest || selectedRound === null ? ("latest" as const) : selectedRound,
+      ...(referenceRound === "" ? {} : { compare: Number(referenceRound) }),
     };
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" }),
-    );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `cmt-top-block-${height}-rounds.json`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function capture(): Promise<InvestigationView> {
+    if (hidden || captureBusy)
+      throw new Error(
+        "Evidence capture is unavailable while this tab is hidden or another capture is running.",
+      );
+    captureBusy = true;
+    const controller = new AbortController();
+    captureController = controller;
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+      const value = await client.capture(controller.signal);
+      if (disposed || controller.signal.aborted) throw new Error("Evidence capture was cancelled.");
+      return value;
+    } finally {
+      clearTimeout(timeout);
+      if (captureController === controller) captureController = undefined;
+      captureBusy = false;
+    }
+  }
+  async function exportEvidence() {
+    if (!report) return;
+    try {
+      const captured = $pausedAt ? viewData : await capture();
+      if (!captured || captured.compact)
+        throw new Error("Resume and capture the complete evidence before exporting.");
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        capturedAt: captured.capturedAt,
+        selectedRound,
+        referenceRound: referenceRound === "" ? null : Number(referenceRound),
+        observationNotice:
+          "Observed RPC vote events only. In-memory bounded retention; no historical backfill. Hash cohorts do not establish binary versions or nondeterminism. Conflicting observations need validation against signed votes.",
+        investigation: captured.raw,
+      };
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `cmt-top-block-${height}-rounds.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (failure) {
+      if (failure instanceof APIError && failure.status === 401) onAuthFailure();
+      else
+        error =
+          failure instanceof Error
+            ? failure.message
+            : "Could not capture complete evidence. Retry shortly.";
+    }
+  }
+  export async function captureForPause(): Promise<number> {
+    capturingPause = true;
+    poller?.setPaused(true);
+    try {
+      const value = await capture();
+      applyReport(value);
+      return value.capturedAt ? Date.parse(value.capturedAt) : Date.now();
+    } finally {
+      capturingPause = false;
+    }
   }
   export async function refreshForResume(): Promise<boolean> {
+    stagedResume = null;
     return (await poller?.refresh(true)) ?? false;
   }
+  export function commitResume() {
+    if (stagedResume) applyReport(stagedResume);
+    stagedResume = null;
+  }
   onMount(() => {
+    lastSelectionKey = selectionKey;
+    lastSessionKey = sessionKey;
     poller = createPoller({
       paused: Boolean($pausedAt),
-      request: (signal) => fetchBlockRounds(height, token || undefined, signal),
+      hidden,
+      intervalMs: () => pollInterval,
+      jitter: 0.1,
+      request: (signal) => client.read(selection(), signal),
       onData: (value) => {
-        report = normalizeInvestigation(value, height);
-        rawReport = value;
-        loadedAt = Date.now();
-        error = "";
+        if ($pausedAt) stagedResume = value;
+        else applyReport(value);
       },
       onError: (failure) => {
         error =
@@ -154,7 +252,11 @@
       onUnauthorized: onAuthFailure,
     });
   });
-  onDestroy(() => poller?.dispose());
+  onDestroy(() => {
+    disposed = true;
+    poller?.dispose();
+    captureController?.abort();
+  });
 </script>
 
 <div class="investigation-page">
@@ -179,7 +281,9 @@
         Compare observed validator votes across rounds. This page stays pinned to this block.
       </p>
     </div>
-    <button on:click={exportEvidence} disabled={!report}>Export evidence JSON</button>
+    <button on:click={exportEvidence} disabled={!report || captureBusy}
+      >{captureBusy ? "Capturing evidence…" : "Export evidence JSON"}</button
+    >
   </div>
   <div class="investigation-toolbar">
     <form on:submit|preventDefault={goToHeight}>
@@ -248,11 +352,9 @@
           >
         </div>
       </div>
-      {#if report.context.upgrade && report.context.upgrade.height === height}<p
-          class="upgrade-context"
-        >
+      {#if context?.upgrade && context?.upgrade.height === height}<p class="upgrade-context">
           <span class="badge warning-text">Upgrade height</span>
-          {report.context.upgrade.name}
+          {context?.upgrade.name}
         </p>{/if}
       <p class="small muted">
         Observation begins when this monitor receives events. Rounds are kept in memory, cleared on
@@ -281,7 +383,7 @@
         <h2>
           {report.status === "evicted"
             ? "This block is outside retained history"
-            : height > report.context.activeHeight
+            : height > (context?.activeHeight ?? 0)
               ? "Waiting to observe this block"
               : "No round observations for this block"}
         </h2>
@@ -328,9 +430,16 @@
         </p>
       </section>
       {#if selectedRound !== null && !round}<div class="notice warning" role="status">
-          Round {selectedRound} is no longer retained. Select an available round or turn on Follow latest
-          round.
+          {#if loading}Loading round {selectedRound} details…{:else}Round {selectedRound} is not available
+            in this response. Select an available round or turn on Follow latest round.{/if}
         </div>{/if}
+      {#if viewData?.compact && referenceRound && (viewData.comparisonStatus === "evicted" || viewData.comparisonStatus === "not_observed")}
+        <div class="notice warning" role="status">
+          Comparison round {referenceRound} is {viewData.comparisonStatus === "evicted"
+            ? "outside retention"
+            : "not observed"}. Select another comparison round.
+        </div>
+      {/if}
       {#if round}
         <div class="selected-round-heading">
           <div>

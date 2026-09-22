@@ -7,9 +7,14 @@
   export let now: number;
   export let loading = false;
   export let resuming = false;
+  export let pausing = false;
+  export let cadenceMs = 1000;
   export let onTogglePause: () => void;
   $: mode = healthMode($dashboard.health, now);
-  $: feedQuiet = feedStatus === "open" && lastMessageAt > 0 && now - lastMessageAt > 5000;
+  $: feedQuiet =
+    feedStatus === "open" &&
+    lastMessageAt > 0 &&
+    now - lastMessageAt > Math.max(5000, cadenceMs * 3);
   $: feedLabel = feedQuiet
     ? "No recent data"
     : {
@@ -18,6 +23,7 @@
         reconnecting: "Reconnecting",
         resyncing: "Syncing",
         closed: "Disconnected",
+        suspended: "Background tab",
       }[feedStatus];
 </script>
 
@@ -48,8 +54,15 @@
     <button
       class="pause-button"
       on:click={onTogglePause}
-      disabled={!$dashboard.receivedAt || resuming}
-      aria-pressed={Boolean($pausedAt)}>{$pausedAt ? "Resume" : "Pause view"}</button
+      disabled={!$dashboard.receivedAt || resuming || pausing}
+      aria-pressed={Boolean($pausedAt)}
+      >{pausing
+        ? "Capturing evidence…"
+        : resuming
+          ? "Refreshing…"
+          : $pausedAt
+            ? "Resume"
+            : "Pause view"}</button
     >
   </div>
 </header>

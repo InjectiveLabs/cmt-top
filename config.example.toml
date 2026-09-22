@@ -59,6 +59,10 @@ listen      = "127.0.0.1:8080"
 # token       = "set-me-when-binding-non-loopback (otherwise a warning is logged)"
 # cors_origin = "https://my-dash.example.com"
 disabled    = false
+max_clients = 256
+api_rate_limit = 600 # requests/second per global lane and resolved API client IP
+# Only trust forwarding headers from explicitly configured proxy CIDRs.
+# trusted_proxies = ["10.0.0.0/24"]
 
 [obs]
 metrics_listen = "127.0.0.1:9091"

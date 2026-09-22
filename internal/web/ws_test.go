@@ -194,13 +194,13 @@ func TestConcurrentWebSocketSubscriptionsAndBroadcasts(t *testing.T) {
 
 func TestQueueOverflowIsObservableAndResyncRestoresBaseline(t *testing.T) {
 	srv, _ := newWSTestServer(t, "")
-	c := &wsClient{hub: srv.hub, send: make(chan wsEnvelope, 2)}
+	c := &wsClient{hub: srv.hub, queueLimit: 2, wake: make(chan struct{}, 1)}
 	c.queue(srv.hub.snapshot())
-	baseline := <-c.send
+	baseline, _ := c.dequeue()
 	for i := 0; i < 3; i++ {
 		c.queue(wsEnvelope{Type: "vote.received"})
 	}
-	firstRemaining := <-c.send
+	firstRemaining, _ := c.dequeue()
 	if firstRemaining.Seq != baseline.Seq+2 {
 		t.Fatalf("overflow did not leave observable sequence gap: %d after %d", firstRemaining.Seq, baseline.Seq)
 	}
@@ -209,8 +209,8 @@ func TestQueueOverflowIsObservableAndResyncRestoresBaseline(t *testing.T) {
 	}
 	srv.opts.State.Mutate(func(s *state.StateData) { s.Height = 456 })
 	srv.hub.resync(c)
-	_ = <-c.send // Last queued patch precedes the replacement baseline.
-	snapshot := <-c.send
+	_, _ = c.dequeue() // Last queued patch precedes the replacement baseline.
+	snapshot, _ := c.dequeue()
 	if snapshot.Type != "state.snapshot" || snapshot.Seq != 5 {
 		t.Fatalf("replacement baseline = %+v", snapshot)
 	}
