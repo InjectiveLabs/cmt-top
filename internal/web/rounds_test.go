@@ -175,6 +175,7 @@ func TestInvestigationAPIRetainsPhaseChangesConflictsAndLateEvidence(t *testing.
 func TestInvestigationAPIDistinguishesEvictedAndUnobservedHeights(t *testing.T) {
 	srv, _ := newWSTestServer(t, "")
 	srv.opts.Tracker = divergence.New(divergence.Config{HistorySize: 2, ThresholdPct: 5})
+	srv.rounds = newRoundsCache(srv.opts.Tracker, srv.opts.Capacity.ObserveReport)
 	for _, height := range []int64{10, 11, 12} {
 		srv.opts.Tracker.ObserveRound(height, 0, "")
 	}

@@ -204,6 +204,22 @@ function clearVotes(validators: Validator[]): Validator[] {
 /** Snapshots are authoritative. Event patches only touch the active height/round. */
 export function reduceEvent(state: Snapshot, env: Envelope, now = Date.now()): Snapshot {
   if (env.type === "state.snapshot") return normalizeSnapshot(env.payload, now);
+  if (env.type === "context.snapshot") {
+    const context = normalizeSnapshot(env.payload, now);
+    return {
+      ...state,
+      height: context.height,
+      committedHeight: context.committedHeight,
+      round: context.round,
+      step: context.step,
+      chain: context.chain,
+      health: context.health,
+      upgrade: context.upgrade,
+      errors: context.errors,
+      displayName: context.displayName,
+      receivedAt: now,
+    };
+  }
   const p = record(env.payload);
   const height = num(p.Height ?? p.height ?? env.height),
     round = num(p.Round ?? p.round ?? env.round);
@@ -302,9 +318,9 @@ export function applySnapshot(value: unknown): void {
 export function applyEnvelope(env: Envelope): void {
   dashboard.update((s) => reduceEvent(s, env));
 }
-export function pauseView(): void {
+export function pauseView(at = Date.now()): void {
   frozen.set(get(dashboard));
-  pausedAt.set(Date.now());
+  pausedAt.set(at);
 }
 export function resumeView(): void {
   frozen.set(null);

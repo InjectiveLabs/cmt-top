@@ -125,3 +125,105 @@ describe("investigation polling lifecycle", () => {
     poller.dispose();
   });
 });
+
+describe("capacity polling controls", () => {
+  it("keeps manual pause independent from hidden-tab suspension", async () => {
+    const request = vi.fn().mockResolvedValue(1);
+    const poller = createPoller({
+      request,
+      onData: vi.fn(),
+      onError: vi.fn(),
+      onUnauthorized: vi.fn(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    poller.setPaused(true);
+    poller.setHidden(true);
+    poller.setHidden(false);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(request).toHaveBeenCalledTimes(1);
+    await poller.refresh(true);
+    poller.setPaused(false, false);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(3);
+    poller.dispose();
+  });
+  it("respects retry guidance and recovers its normal cadence after success", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new APIError(429, 5000)).mockResolvedValue(1);
+    const poller = createPoller({
+      request,
+      onData: vi.fn(),
+      onError: vi.fn(),
+      onUnauthorized: vi.fn(),
+    });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(request).toHaveBeenCalledTimes(3);
+    poller.dispose();
+  });
+  it("adapts settled cadence and counts unchanged validation as success", async () => {
+    let interval = 1000;
+    const request = vi.fn().mockResolvedValue({ unchanged: true });
+    const onData = vi.fn(() => {
+      interval = 5000;
+    });
+    const poller = createPoller({
+      request,
+      onData,
+      intervalMs: () => interval,
+      onError: vi.fn(),
+      onUnauthorized: vi.fn(),
+    });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(onData).toHaveBeenCalledTimes(2);
+    poller.dispose();
+  });
+});
+
+it("loads a changed selection immediately after cancelling the previous fetch", async () => {
+  const pending = deferred<number>();
+  const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(2),
+    onData = vi.fn();
+  const poller = createPoller({
+    request,
+    onData,
+    intervalMs: 5000,
+    onError: vi.fn(),
+    onUnauthorized: vi.fn(),
+  });
+  poller.invalidate();
+  expect(request).toHaveBeenCalledTimes(1);
+  pending.resolve(1);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(onData).toHaveBeenCalledOnce();
+  expect(onData).toHaveBeenCalledWith(2);
+  poller.dispose();
+});
+
+it("does not carry an invalidation across a forced paused refresh", async () => {
+  const first = deferred<number>(),
+    request = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(2);
+  const poller = createPoller({
+    request,
+    onData: vi.fn(),
+    onError: vi.fn(),
+    onUnauthorized: vi.fn(),
+  });
+  poller.invalidate();
+  poller.setPaused(true);
+  first.resolve(1);
+  await vi.advanceTimersByTimeAsync(0);
+  await poller.refresh(true);
+  poller.setPaused(false, false);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(request).toHaveBeenCalledTimes(3);
+  poller.dispose();
+});

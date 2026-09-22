@@ -1,0 +1,167 @@
+{
+  "target": "http://127.0.0.1:<ephemeral>",
+  "profile": "mainnet45",
+  "seed": 1,
+  "durationSeconds": 12.00137325,
+  "offered": 200,
+  "admitted": 200,
+  "investigatorsIntended": 100,
+  "investigatorProfilesReady": 100,
+  "investigatorsWithReports": 100,
+  "admissionTransientErrors": 0,
+  "admissionRetries": 0,
+  "baselineReady": 200,
+  "sessionErrors": 0,
+  "sequenceGaps": 0,
+  "messages": 78088,
+  "payloadBytes": 146466039,
+  "messageTypes": {
+    "block.committed": {
+      "messages": 900,
+      "bytes": 330700
+    },
+    "context.snapshot": {
+      "messages": 1200,
+      "bytes": 984700
+    },
+    "divergence.detected": {
+      "messages": 800,
+      "bytes": 1787800
+    },
+    "divergence.resolved": {
+      "messages": 1800,
+      "bytes": 5444100
+    },
+    "pong": {
+      "messages": 100,
+      "bytes": 7288
+    },
+    "round.changed": {
+      "messages": 900,
+      "bytes": 201400
+    },
+    "state.snapshot": {
+      "messages": 1400,
+      "bytes": 115855771
+    },
+    "status.updated": {
+      "messages": 200,
+      "bytes": 46800
+    },
+    "vote.received": {
+      "messages": 70788,
+      "bytes": 21807480
+    }
+  },
+  "snapshots": 1400,
+  "contexts": 1200,
+  "reports": 1177,
+  "notModified": 0,
+  "reportBytes": 45383982,
+  "httpStatuses": {
+    "bootstrap:200": 497,
+    "report:200": 1178
+  },
+  "latencyMs": {
+    "baselineReadyP50": 49.532,
+    "baselineReadyP95": 74.665,
+    "baselineReadyP99": 77.097,
+    "bootstrapP50": 0.694,
+    "bootstrapP95": 18.71,
+    "bootstrapP99": 19.227,
+    "reportP50": 0.31,
+    "reportP95": 1.056,
+    "reportP99": 10.352
+  },
+  "latencyObservations": {
+    "baselineReady": 200,
+    "bootstrap": 497,
+    "report": 1178
+  },
+  "resources": {
+    "processMetricsAvailable": true,
+    "samples": 13,
+    "cpuStartSeconds": 0.259526,
+    "cpuEndSeconds": 2.4010759999999998,
+    "averageCpuCores": 0.17844207953452323,
+    "peakRssBytes": 52150272,
+    "peakGoroutines": 580,
+    "peakReportCacheBytes": 1665130,
+    "peakQueueBytes": 15792,
+    "generatorPeakHeapBytes": 10913088
+  },
+  "upstreamBefore": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 0,
+    "committedHeight": 1000,
+    "events": 211,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 30,
+      "rpc.status": 7,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": false,
+    "ready": true
+  },
+  "upstreamAfter": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1012,
+    "round": 0,
+    "committedHeight": 1011,
+    "events": 1148,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 30,
+      "rpc.status": 9,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": true,
+    "ready": true
+  },
+  "dropMetricsVerified": true,
+  "dropMetrics": {
+    "cmt_top_bus_dropped_events_total{subscriber=\"metrics\"}": 0,
+    "cmt_top_bus_dropped_events_total{subscriber=\"wshub\"}": 0,
+    "cmt_top_ingest_dropped_events_total": 0,
+    "cmt_top_ws_dropped_events_total": 0
+  },
+  "oracleVerified": true,
+  "semanticDigest": "fc1735f1dc4b539a9bf830c718b1eec4f8c8f283575cc052f9829b6941f754d2",
+  "pass": true,
+  "_measurement": {
+    "date": "2026-09-22",
+    "environment": "native macOS arm64; fixture, app and generator co-located; no CPU/memory quota",
+    "appRevision": "working_tree",
+    "harnessGates": "strict_per_session_report_drop_v1",
+    "workload": {
+      "users": 200,
+      "rampSeconds": 0,
+      "holdSeconds": 12,
+      "investigatePercent": 50,
+      "rounds": 1,
+      "stalled": false,
+      "historyBlocks": 120,
+      "eventInterval": "1ms",
+      "blockInterval": "1s"
+    },
+    "scope": "local protocol test; no gateway, TLS or browser rendering; not production certification"
+  }
+}

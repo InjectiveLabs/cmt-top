@@ -23,6 +23,8 @@ export interface RoundValidator {
   precommit: RecordedVote;
 }
 export interface RecordedRound {
+  detailsLoaded?: boolean;
+  phaseSummaries?: { prevote: PhaseSummary; precommit: PhaseSummary };
   round: number;
   proposer: string;
   firstSeenAt: string;
@@ -235,6 +237,7 @@ export interface PhaseSummary {
   segments: { key: string; label: string; percent: number; color: string }[];
 }
 export function summarizePhase(round: RecordedRound, phase: Phase): PhaseSummary {
+  if (round.detailsLoaded === false && round.phaseSummaries) return round.phaseSummaries[phase];
   const total = powerOf(round.totalVotingPower);
   const groups = new Map<string, HashCohort>();
   const exclusive = new Map<string, bigint>();

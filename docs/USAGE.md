@@ -30,6 +30,9 @@ See [.env.example](../.env.example). Common knobs:
 | `CMTOP_MONITORED_RPCS` | CSV of extra RPCs for cross-endpoint AppHash compare. |
 | `CMTOP_MODE` | `tui` \| `web` \| `both` \| `headless` |
 | `CMTOP_WEB_LISTEN` | Web bind, default `127.0.0.1:8080`. |
+| `CMTOP_WEB_MAX_CLIENTS` | Browser WebSocket admission cap, default `256`; pending handshakes count. |
+| `CMTOP_WEB_API_RATE_LIMIT` | Requests/second budget, default `600`; normal API, session probes and handshakes have separate global lanes; API reads also use a per-client-IP budget. |
+| `CMTOP_WEB_TRUSTED_PROXIES` | CSV of trusted proxy CIDRs; unset ignores forwarding headers. |
 | `CMTOP_WEB_TOKEN` | Bearer token. Recommended when binding non-loopback (a warning is logged if unset). |
 | `CMTOP_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
 | `CMTOP_BECH32_PREFIX` | Operator address prefix (default `inj`). |
@@ -44,6 +47,7 @@ See [.env.example](../.env.example). Common knobs:
 --monitored-rpc <url>       extra RPC for AppHash compare; pass multiple times
 --mode tui|web|both|headless
 --web-listen <addr>         default 127.0.0.1:8080
+--web-max-clients <number>  positive browser connection cap, default 256
 --web-token <token>         recommended for non-loopback bind
 --metrics-listen <addr>     default 127.0.0.1:9091
 --bech32-prefix <prefix>    default inj
@@ -222,6 +226,7 @@ Scrape config lives at [deploy/prometheus.yml](../deploy/prometheus.yml).
 | Path | Description |
 |---|---|
 | `GET /` | Svelte SPA (cold-load). |
+| `GET /api/session` | Small authenticated capability, server-epoch and polling-cadence response. |
 | `GET /api/state` | Complete snapshot: active/committed heights, validators, vote splits, health, blocks, and RPC comparisons. |
 | `GET /api/validators?search=<q>` | Server-side filter. |
 | `GET /api/validators/{addr}` | Single validator drilldown. |
@@ -230,6 +235,8 @@ Scrape config lives at [deploy/prometheus.yml](../deploy/prometheus.yml).
 | `GET /api/blocks` | Up to 120 retained committed block samples (memory only). |
 | `GET /blocks/{height}/rounds` | Dedicated page pinned to one block's observed rounds. |
 | `GET /api/blocks/{height}/rounds` | Authenticated round archive, validator phase votes, groups, coverage, retention, and current chain context. |
+| `GET /api/blocks/{height}/rounds?view=compact&round=latest&compare=<n>` | All round summaries and at most two full round details, revision, strong ETag and private conditional revalidation. |
+| `GET /api/blocks/{height}/rounds?view=full&capture=1` | Fresh complete capture with actual revision, process epoch and capture time; bounded capture admission. |
 | `GET /api/chain` | Chain card + upgrade plan. |
 | `WS  /ws?token=<t>` | Streaming envelope (snapshot + patches). |
 | `GET /healthz` | Process liveness. |
@@ -247,6 +254,7 @@ make web           # Svelte SPA into internal/web/dist
 make test          # Go unit tests
 make test-race     # with -race
 make e2e           # deterministic local RPC/WS integration tests
+make capacity-smoke # synthetic 150-session protocol check
 make lint          # golangci-lint (nonzero exit on missing tool or findings)
 ```
 
@@ -262,6 +270,8 @@ cd .. && go run -tags webui ./cmd/cmt-top --mode web
 Clean-checkout Go tests do not require generated frontend assets. Blacksmith CI and
 release gates run the Go race detector, vet, frontend checks/tests/build, and a
 container smoke test using the documented Compose environment.
+The [capacity testing guide](CAPACITY_TESTING.md) documents synthetic replay,
+browser checks, resource bounds and the remaining production release gates.
 
 ### CI and image publishing
 
@@ -282,10 +292,14 @@ with validator counts as secondary context.
 WebSocket sequences are scoped to each client connection, starting at 1. Channel
 filtering does not introduce sequence gaps. Clients request `{ "type": "resync" }`
 after a gap and ignore patches until the next `state.snapshot`; reconnecting
-also starts with a snapshot. The server sends a complete snapshot at least every
-second while connected, including cleared errors and removed upgrade plans.
-There is no historical `since` replay. Pausing freezes the visible snapshot;
-resuming requests fresh state.
+also starts with a snapshot. Dashboard subscriptions receive a complete repair snapshot every second, including
+cleared errors and removed upgrade plans. Investigation clients can negotiate
+the lightweight `context` channel instead. Initial connection and explicit resync
+always return a complete authoritative baseline. Repeated resync requests share
+one build at most every 250 ms.
+There is no historical `since` replay. Pausing an investigation captures a complete
+report before freezing it, so paused selection and export remain consistent.
+Resuming requests fresh state once. Hidden tabs stop investigation polling.
 
 `headless` serves metrics only. `ui.web.disabled = true` disables web in `both`
 mode; combining it with `web` mode is an explicit configuration error. Missing

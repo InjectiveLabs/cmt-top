@@ -1,15 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { createWS, type ConnectionStatus, type WSClient } from "./lib/ws";
-  import { APIError, fetchSnapshot } from "./lib/api";
-  import {
-    applyEnvelope,
-    applySnapshot,
-    dashboard,
-    pausedAt,
-    pauseView,
-    resumeView,
-  } from "./lib/stores";
+  import { APIError } from "./lib/api";
+  import { legacySession } from "./lib/session";
+  import { applyEnvelope, dashboard, pausedAt, pauseView, resumeView } from "./lib/stores";
   import { formatHeight, healthMode } from "./lib/model";
   import Header from "./components/Header.svelte";
   import ChainCard from "./components/ChainCard.svelte";
@@ -39,7 +33,10 @@
     requiresAuth = false,
     loading = true,
     error = "",
-    resuming = false;
+    resuming = false,
+    pausing = false,
+    hidden = false;
+  let sessionInfo = legacySession();
   let feedStatus: ConnectionStatus = "connecting",
     lastMessageAt = 0,
     now = Date.now();
@@ -49,6 +46,7 @@
   let generation = 0,
     destroyed = false;
   $: mode = healthMode($dashboard.health, now);
+  $: ws?.setProfile(hidden ? "hidden" : route.page === "rounds" ? "context" : "dashboard");
   function rememberToken(value: string) {
     try {
       if (value) sessionStorage.setItem("cmt-top-token", value);
@@ -72,36 +70,31 @@
     stopSocket();
     feedStatus = "closed";
   }
-  async function connect() {
+  function connect() {
     const run = ++generation;
     stopSocket();
     loading = true;
     error = "";
     requiresAuth = false;
-    feedStatus = "connecting";
-    try {
-      const snapshot = await fetchSnapshot(token || undefined, AbortSignal.timeout(10000));
-      if (destroyed || run !== generation) return;
-      applySnapshot(snapshot);
-      rememberToken(token);
-      loading = false;
-      ws = createWS("/ws", token || undefined, authFailed);
-      unsubscribers = [
-        ws.status.subscribe((value) => (feedStatus = value)),
-        ws.lastMessageAt.subscribe((value) => (lastMessageAt = value)),
-        ws.onMessage((env) => applyEnvelope(env)),
-      ];
-    } catch (e) {
-      if (destroyed || run !== generation) return;
-      loading = false;
-      feedStatus = "closed";
-      if (e instanceof APIError && e.status === 401) authFailed();
-      else
-        error =
-          e instanceof APIError
-            ? e.message
-            : "Could not reach the dashboard. Check the server and try again.";
-    }
+    ws = createWS("/ws", token || undefined, authFailed);
+    unsubscribers = [
+      ws.status.subscribe((value) => {
+        feedStatus = value;
+        if (value === "closed") loading = false;
+      }),
+      ws.lastMessageAt.subscribe((value) => (lastMessageAt = value)),
+      ws.session.subscribe((value) => (sessionInfo = value)),
+      ws.error.subscribe((value) => (error = value)),
+      ws.onMessage((env) => {
+        if (destroyed || run !== generation) return;
+        applyEnvelope(env);
+        if (env.type === "state.snapshot") {
+          loading = false;
+          rememberToken(token);
+        }
+      }),
+    ];
+    ws.setProfile(hidden ? "hidden" : route.page === "rounds" ? "context" : "dashboard");
   }
   async function authenticate() {
     token = enteredToken.trim();
@@ -113,19 +106,35 @@
     if (details instanceof HTMLDetailsElement) details.open = true;
   }
   async function togglePause() {
+    if (pausing || resuming) return;
     if (!$pausedAt) {
-      pauseView();
+      pausing = true;
+      try {
+        const capturedAt =
+          route.page === "rounds" ? await investigationPage?.captureForPause() : Date.now();
+        if (!capturedAt) throw new Error("Could not capture complete investigation evidence.");
+        pauseView(capturedAt);
+        error = "";
+      } catch (e) {
+        if (e instanceof APIError && e.status === 401) authFailed();
+        else error = e instanceof Error ? e.message : "Could not pause the view. Retry shortly.";
+      } finally {
+        pausing = false;
+      }
       return;
     }
     resuming = true;
+    const resumePath = location.pathname;
     try {
-      const snapshot = await fetchSnapshot(token || undefined, AbortSignal.timeout(10000));
+      if (!ws) throw new Error("The browser feed is unavailable.");
+      await ws.refresh();
+      if (location.pathname !== resumePath) throw new Error("The page changed during resume.");
       if (route.page === "rounds" && !(await investigationPage?.refreshForResume())) {
         throw new Error("Could not refresh block investigation.");
       }
-      applySnapshot(snapshot);
+      if (location.pathname !== resumePath) throw new Error("The page changed during resume.");
+      investigationPage?.commitResume();
       resumeView();
-      ws?.send({ type: "resync" });
       error = "";
     } catch (e) {
       if (e instanceof APIError && e.status === 401) authFailed();
@@ -148,7 +157,8 @@
         /* Optional storage. */
       }
     }
-    void connect();
+    hidden = document.hidden;
+    connect();
     timer = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -161,10 +171,21 @@
   });
 </script>
 
+<svelte:document on:visibilitychange={() => (hidden = document.hidden)} />
+
 <svelte:window on:popstate={() => (route = parseRoute(location.pathname))} />
 
 <div class="app">
-  <Header {feedStatus} {lastMessageAt} {now} {loading} {resuming} onTogglePause={togglePause} />
+  <Header
+    {feedStatus}
+    {lastMessageAt}
+    {now}
+    {loading}
+    {resuming}
+    {pausing}
+    cadenceMs={sessionInfo.cadence.snapshotMs}
+    onTogglePause={togglePause}
+  />
   <main>
     {#if requiresAuth}
       <section class="auth-panel panel" aria-labelledby="auth-heading">
@@ -225,13 +246,15 @@
           The connected node is catching up. Its view may lag the chain.
         </div>{/if}
       {#if route.page === "rounds"}
-        {#if !loading && $dashboard.receivedAt}
+        {#if $dashboard.receivedAt}
           {#key `${route.height}/${token}`}
             <BlockRounds
               bind:this={investigationPage}
               height={route.height}
               {token}
               {now}
+              {hidden}
+              session={sessionInfo}
               onNavigate={navigate}
               onAuthFailure={authFailed}
             />

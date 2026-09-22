@@ -167,3 +167,34 @@ describe("frozen presentation", () => {
     expect(get(pausedAt)).toBe(0);
   });
 });
+
+it("context snapshots clear diagnostics without erasing dashboard evidence", () => {
+  const before = normalizeSnapshot({
+    height: 10,
+    chain: { network: "chain", catchingUp: true },
+    errors: { rpc: "down" },
+    upgrade: { name: "v2", height: 20 },
+    validators: [{ address: "A", votingPower: "10" }],
+    blocks: [{ height: 9 }],
+  });
+  const after = reduceEvent(before, {
+    type: "context.snapshot",
+    seq: 2,
+    payload: {
+      height: 11,
+      committedHeight: 10,
+      round: 1,
+      step: 4,
+      chain: { network: "chain", catchingUp: false },
+      health: { mode: "streaming" },
+      upgrade: null,
+      errors: {},
+    },
+  });
+  expect(after.height).toBe(11);
+  expect(after.chain.catchingUp).toBe(false);
+  expect(after.errors).toEqual({});
+  expect(after.upgrade).toBeNull();
+  expect(after.validators).toBe(before.validators);
+  expect(after.blocks).toBe(before.blocks);
+});

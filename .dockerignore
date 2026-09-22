@@ -16,6 +16,9 @@ docker-compose.override.yml
 web/node_modules/
 web/dist/
 web/.vite/
+web/test-results/
+web/playwright-report/
+capacity-results/
 
 # Embedded SPA — rebuilt inside the image
 internal/web/dist/*

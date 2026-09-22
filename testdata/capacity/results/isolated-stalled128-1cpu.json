@@ -1,0 +1,136 @@
+{
+  "target": "http://127.0.0.1:<ephemeral>",
+  "profile": "mainnet45",
+  "seed": 1,
+  "durationSeconds": 23.001323177,
+  "offered": 150,
+  "admitted": 150,
+  "investigatorsIntended": 150,
+  "investigatorProfilesReady": 150,
+  "investigatorsWithReports": 150,
+  "admissionTransientErrors": 0,
+  "admissionRetries": 0,
+  "baselineReady": 150,
+  "sessionErrors": 0,
+  "sequenceGaps": 0,
+  "messages": 3483,
+  "payloadBytes": 122374201,
+  "messageTypes": {
+    "context.snapshot": {
+      "messages": 3181,
+      "bytes": 2355323
+    },
+    "pong": {
+      "messages": 150,
+      "bytes": 11393
+    },
+    "state.snapshot": {
+      "messages": 152,
+      "bytes": 120007485
+    }
+  },
+  "snapshots": 152,
+  "contexts": 3181,
+  "reports": 3119,
+  "notModified": 0,
+  "reportBytes": 732914123,
+  "httpStatuses": {
+    "bootstrap:200": 379,
+    "report:200": 3120
+  },
+  "latencyMs": {
+    "baselineReadyP50": 10.113,
+    "baselineReadyP95": 120.232,
+    "baselineReadyP99": 169.669,
+    "bootstrapP50": 3.636,
+    "bootstrapP95": 15.641,
+    "bootstrapP99": 36.727,
+    "reportP50": 1.227,
+    "reportP95": 23.057,
+    "reportP99": 105.478
+  },
+  "latencyObservations": {
+    "baselineReady": 150,
+    "bootstrap": 379,
+    "report": 3120
+  },
+  "resources": {
+    "processMetricsAvailable": true,
+    "samples": 24,
+    "cpuStartSeconds": 4.33,
+    "cpuEndSeconds": 6.35,
+    "averageCpuCores": 0.08782103466203559,
+    "peakRssBytes": 118456320,
+    "peakGoroutines": 356,
+    "peakReportCacheBytes": 14721891,
+    "peakQueueBytes": 0,
+    "generatorPeakHeapBytes": 7563080
+  },
+  "upstreamBefore": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 127,
+    "committedHeight": 1000,
+    "events": 11895,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 1,
+      "rpc.block": 3,
+      "rpc.consensus_state": 1,
+      "rpc.status": 7,
+      "rpc.validators": 1,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": false,
+    "ready": true
+  },
+  "upstreamAfter": {
+    "identity": "cmt-top-local-replay-v1",
+    "profile": "mainnet45",
+    "seed": 1,
+    "validators": 45,
+    "height": 1001,
+    "round": 127,
+    "committedHeight": 1000,
+    "events": 11918,
+    "connections": 1,
+    "activeConnections": 1,
+    "requests": {
+      "lcd.upgrade": 1,
+      "lcd.validators": 2,
+      "rpc.block": 5,
+      "rpc.consensus_state": 1,
+      "rpc.status": 12,
+      "rpc.validators": 2,
+      "ws.subscribe": 4
+    },
+    "unexpectedRequests": 0,
+    "paused": true,
+    "ready": true
+  },
+  "dropMetricsVerified": true,
+  "dropMetrics": {
+    "cmt_top_bus_dropped_events_total{subscriber=\"metrics\"}": 0,
+    "cmt_top_bus_dropped_events_total{subscriber=\"wshub\"}": 0,
+    "cmt_top_ingest_dropped_events_total": 0,
+    "cmt_top_ws_dropped_events_total": 0
+  },
+  "oracleVerified": true,
+  "semanticDigest": "2a65d363949d163f59f8be1388fe72d5603a779f5c5871fca068032a8f6eba08",
+  "pass": true,
+  "verification": {
+    "date": "2026-09-22",
+    "environment": "Linux arm64 Docker Desktop; app, source and generator share 1 CPU / 512 MiB; --network none",
+    "rampSeconds": 3,
+    "holdSeconds": 20,
+    "rounds": 128,
+    "investigatePercent": 100,
+    "gates": "Final strict per-investigator report, profile barrier, conditional provenance and final drop-metric verification. Short synthetic run; no Gateway, TLS, browser rendering or production-capacity certification."
+  }
+}

@@ -31,6 +31,7 @@ type Collectors struct {
 	BusDropped      *prometheus.GaugeVec
 	DataAge         prometheus.Gauge
 	tracker         *divergence.Tracker
+	Capacity        *Capacity
 }
 
 // SetTracker configures live gauge reconciliation before Run is started.
@@ -45,6 +46,7 @@ func RecordIngestDrop(n uint64) { ingestDropped.Add(n) }
 // Register builds collectors and registers them on the default registry.
 func Register() *Collectors {
 	c := &Collectors{
+		Capacity: NewCapacity(prometheus.DefaultRegisterer),
 		Height: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "cmt_top_height", Help: "Current block height observed.",
 		}),

@@ -42,6 +42,7 @@ func newRootCmd() *cobra.Command {
 		mode          string
 		webListen     string
 		webToken      string
+		webMaxClients int
 		metricsAddr   string
 		logLevel      string
 		bech32        string
@@ -81,6 +82,9 @@ func newRootCmd() *cobra.Command {
 			if webListen != "" {
 				cfg.UI.Web.Listen = webListen
 			}
+			if cmd.Flags().Changed("web-max-clients") {
+				cfg.UI.Web.MaxClients = webMaxClients
+			}
 			if webToken != "" {
 				cfg.UI.Web.Token = webToken
 			}
@@ -113,6 +117,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&monitoredRPCs, "monitored-rpc", nil, "extra RPC URL(s) for cross-endpoint AppHash comparison; pass multiple times")
 	cmd.Flags().StringVar(&mode, "mode", "", "tui | web | both | headless")
 	cmd.Flags().StringVar(&webListen, "web-listen", "", "web bind addr (default 127.0.0.1:8080)")
+	cmd.Flags().IntVar(&webMaxClients, "web-max-clients", 256, "maximum browser WebSocket connections")
 	cmd.Flags().StringVar(&webToken, "web-token", "", "bearer token; recommended when binding non-loopback")
 	cmd.Flags().StringVar(&metricsAddr, "metrics-listen", "", "prometheus bind addr")
 	cmd.Flags().StringVar(&logLevel, "log-level", "", "debug | info | warn | error")
@@ -167,6 +172,7 @@ func run(cfg config.Config) error {
 	mode := strings.ToLower(cfg.UI.Mode)
 	if (mode == "web" || mode == "both") && !cfg.UI.Web.Disabled {
 		srv := web.New(web.Options{Listen: cfg.UI.Web.Listen, Token: cfg.UI.Web.Token, CORSOrigin: cfg.UI.Web.CORSOrigin,
+			MaxClients: cfg.UI.Web.MaxClients, APIRateLimit: cfg.UI.Web.APIRateLimit, TrustedProxies: cfg.UI.Web.TrustedProxies, Capacity: collectors.Capacity,
 			DisplayName: cfg.Chain.Name, ExplorerURL: cfg.Chain.ExplorerURL, State: st, Bus: bus, Tracker: orch.Tracker(), Logger: log, Ring: ring, Version: version,
 			Ready: func() bool { snap := st.Snapshot(); return snap.LastRound != nil && snap.NodeStatus != nil },
 		})

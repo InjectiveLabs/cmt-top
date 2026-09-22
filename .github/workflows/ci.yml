@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # browser rollback test builds the pinned pre-capacity revision
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -53,8 +54,33 @@ jobs:
           go test -mod=readonly -race -tags webui -timeout=10m ./...
           go build -mod=readonly -tags webui -o bin/cmt-top ./cmd/cmt-top
 
+      - name: Check browser capacity lifecycle and rollback
+        working-directory: web
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm test:e2e
+
+      - name: Save browser failure traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-capacity-traces
+          path: web/test-results/
+          if-no-files-found: ignore
+
       - name: Set up cached Docker builder
         uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1.11.0
+
+      - name: Synthetic 150-session capacity smoke (no outbound network)
+        run: make capacity-isolated
+
+      - name: Save capacity smoke results and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: capacity-smoke
+          path: capacity-results/smoke/
+          if-no-files-found: ignore
 
       - name: Build test image
         uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2.2.0

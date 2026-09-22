@@ -105,6 +105,7 @@ type InvestigationGroup struct {
 }
 
 type archivedHeight struct {
+	revision                      uint64
 	height                        int64
 	rounds                        map[int64]*archivedRound
 	firstSeenAt, lastSeenAt       time.Time
@@ -144,6 +145,7 @@ func (t *Tracker) ObserveRound(height, round int64, proposer string) {
 	if proposer != "" && rd.proposer != proposer {
 		rd.proposer = proposer
 		rd.lastSeenAt, block.lastSeenAt = now, now
+		block.revision++
 	}
 }
 
@@ -179,6 +181,9 @@ func (t *Tracker) observeVoteLocked(v VoteEvent) {
 				}
 			}
 			if unknown >= InvestigationUnknownValidatorLimit {
+				if !rd.truncated {
+					block.revision++
+				}
 				rd.truncated = true
 				return
 			}
@@ -197,6 +202,9 @@ func (t *Tracker) observeVoteLocked(v VoteEvent) {
 		}
 	}
 	if len(vote.Hashes) >= InvestigationHashLimit {
+		if !vote.Truncated || !vote.Conflicting || !rd.truncated {
+			block.revision++
+		}
 		vote.Truncated = true
 		vote.Conflicting = true
 		rd.truncated = true
@@ -210,6 +218,7 @@ func (t *Tracker) observeVoteLocked(v VoteEvent) {
 	vote.Hashes = append(vote.Hashes, observation)
 	vote.Conflicting = len(vote.Hashes) > 1
 	rd.lastSeenAt, block.lastSeenAt = now, now
+	block.revision++
 }
 
 func (t *Tracker) archiveHeightLocked(height int64, now time.Time) *archivedHeight {
@@ -234,8 +243,9 @@ func (t *Tracker) createArchiveHeightLocked(height int64, now time.Time) *archiv
 	if block := t.archive[height]; block != nil {
 		return block
 	}
-	block := &archivedHeight{height: height, rounds: make(map[int64]*archivedRound), firstSeenAt: now, lastSeenAt: now, evictedThrough: -1}
+	block := &archivedHeight{revision: 1, height: height, rounds: make(map[int64]*archivedRound), firstSeenAt: now, lastSeenAt: now, evictedThrough: -1}
 	t.archive[height] = block
+	t.catalogueRevision++
 	if height > t.archiveLatestHeight {
 		t.archiveLatestHeight = height
 	}
@@ -271,6 +281,7 @@ func (t *Tracker) archiveRoundLocked(block *archivedHeight, round int64, now tim
 	}
 	rd := &archivedRound{round: round, firstSeenAt: now, lastSeenAt: now, roster: roster, votes: make(map[string]map[VoteType]*InvestigationVote)}
 	block.rounds[round] = rd
+	block.revision++
 	if block.roundsObserved == 0 || round < block.firstRound {
 		block.firstRound = round
 	}
@@ -305,14 +316,17 @@ func (t *Tracker) archiveCommitLocked(height int64, hash string) {
 	}
 	if !block.committed || block.canonicalHash == "" && hash != "" {
 		block.committed, block.canonicalHash, block.lastSeenAt = true, hash, now
+		block.revision++
 	}
 }
 
 // BlockInvestigation returns an independent snapshot; callers may freely mutate
 // its maps/slices. The live detector's thresholds do not filter this archive.
 func (t *Tracker) BlockInvestigation(height int64) BlockInvestigation {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	return t.CaptureInvestigation(height).Build()
+}
+
+func (t *Tracker) investigationHeaderLocked(height int64) BlockInvestigation {
 	result := BlockInvestigation{Height: height, Status: "not_observed", Rounds: []InvestigationRound{},
 		Retention: InvestigationRetention{HeightLimit: t.cfg.HistorySize, RoundLimit: InvestigationRoundLimit,
 			HashesPerValidatorLimit: InvestigationHashLimit, UnknownValidatorLimit: InvestigationUnknownValidatorLimit, RetainedHeights: []int64{}}}
@@ -348,13 +362,6 @@ func (t *Tracker) BlockInvestigation(height int64) BlockInvestigation {
 		result.Coverage.MissingRounds = block.lastRound - int64(block.roundsObserved) + 1
 	}
 	result.Truncated = block.roundsEvicted > 0
-	for _, rd := range block.rounds {
-		round := snapshotArchiveRound(rd, block.canonicalHash, block.committed)
-		result.Rounds = append(result.Rounds, round)
-		result.Truncated = result.Truncated || round.Truncated
-		result.Coverage.ValidatorRosterComplete = result.Coverage.ValidatorRosterComplete && round.ValidatorRosterComplete
-	}
-	sort.Slice(result.Rounds, func(i, j int) bool { return result.Rounds[i].Round < result.Rounds[j].Round })
 	return result
 }
 

@@ -10,7 +10,7 @@ import (
 
 func isolatedConfigEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"CMTOP_RPC", "CMTOP_MODE", "CMTOP_WEB_LISTEN", "CMTOP_WEB_TOKEN", "CMTOP_LOG_LEVEL", "CMTOP_BECH32_PREFIX", "CMTOP_LCD", "CMTOP_MONITORED_RPCS", "CMTOP_METRICS_LISTEN"} {
+	for _, name := range []string{"CMTOP_WEB_MAX_CLIENTS", "CMTOP_WEB_API_RATE_LIMIT", "CMTOP_WEB_TRUSTED_PROXIES", "CMTOP_RPC", "CMTOP_MODE", "CMTOP_WEB_LISTEN", "CMTOP_WEB_TOKEN", "CMTOP_LOG_LEVEL", "CMTOP_BECH32_PREFIX", "CMTOP_LCD", "CMTOP_MONITORED_RPCS", "CMTOP_METRICS_LISTEN"} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
