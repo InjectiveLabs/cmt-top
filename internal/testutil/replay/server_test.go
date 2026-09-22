@@ -19,6 +19,8 @@ import (
 	"github.com/InjectiveLabs/cmt-top/internal/testutil/replay"
 )
 
+var fixtureHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 func TestSeededSourceAndTimestampNormalization(t *testing.T) {
 	a, b := replay.Validators("mainnet45", 42), replay.Validators("mainnet45", 42)
 	if len(a) != 45 || !reflect.DeepEqual(a, b) || reflect.DeepEqual(a, replay.Validators("mainnet45", 43)) {
@@ -123,7 +125,7 @@ func TestReplayExercisesActualOrchestrator(t *testing.T) {
 
 func sourceOracle(t *testing.T, base string, height int64) *replay.ExpectedHeight {
 	t.Helper()
-	resp, err := http.Get(fmt.Sprintf("%s/_fixture/oracle?height=%d", base, height))
+	resp, err := fixtureHTTPClient.Get(fmt.Sprintf("%s/_fixture/oracle?height=%d", base, height))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +173,7 @@ func TestReplayUpstreamReconnectRetainsEvidence(t *testing.T) {
 	})
 	control := func(body string) {
 		t.Helper()
-		resp, err := http.Post(server.URL+"/_fixture/control", "application/json", bytes.NewBufferString(body))
+		resp, err := fixtureHTTPClient.Post(server.URL+"/_fixture/control", "application/json", bytes.NewBufferString(body))
 		if err != nil {
 			t.Fatal(err)
 		}

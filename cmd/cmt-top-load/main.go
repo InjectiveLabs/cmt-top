@@ -626,6 +626,20 @@ func (r *run) finish(ctx context.Context) {
 		r.errorf("oracle fetch: %v", err)
 		return
 	}
+	// NewBlock advances the fixture's active height before the next NewRound
+	// creates its oracle evidence. A freeze at that boundary must compare the
+	// last committed block instead; missing evidence at any other height fails.
+	if expected == nil && r.s.UpstreamAfter.CommittedHeight > 0 && height-1 == r.s.UpstreamAfter.CommittedHeight {
+		height = r.s.UpstreamAfter.CommittedHeight
+		if err := r.getFixture(ctx, fmt.Sprintf("/_fixture/oracle?height=%d", height), &expected); err != nil {
+			r.errorf("committed oracle fetch: %v", err)
+			return
+		}
+	}
+	if expected == nil {
+		r.errorf("source oracle evidence unavailable at height %d", height)
+		return
+	}
 	for attempt := 0; attempt < 20; attempt++ {
 		code, body, _, err := r.request(ctx, fmt.Sprintf("/api/blocks/%d/rounds?view=full&capture=1", height), "")
 		if err == nil && code == 200 {
